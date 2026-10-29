@@ -9,8 +9,8 @@ import (
 )
 
 func TestEdgeSecGEC(t *testing.T) {
-	a := edgeSecGEC(time.Unix(1700000000, 0))
-	b := edgeSecGEC(time.Unix(1700000100, 0))
+	a := edgeSecGEC(time.Unix(1699999900, 0))
+	b := edgeSecGEC(time.Unix(1700000000, 0))
 	if len(a) != 64 || a != strings.ToUpper(a) || a != b {
 		t.Fatalf("token should be uppercase sha256 stable within five minutes: %q %q", a, b)
 	}
