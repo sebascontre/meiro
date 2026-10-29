@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
@@ -179,27 +181,51 @@ func (a *app) syncSongRequests() {
 // transitions on average.
 const radioTransitionChance = 4
 
-// radioAnnouncement is a short Spanish link between two requested songs.
+// radioScripts are the announcer's lines; %P is the song that just played
+// and %N the one that follows. Every one names Radio Chatcito.
+var radioScripts = []string{
+	"Acabamos de escuchar %P. Seguimos aquí, en Radio Chatcito. Ahora escuchamos %N. ¡Gracias por acompañarnos!",
+	"Y así sonó %P. Esto es Radio Chatcito, donde el chat manda. Sigue %N. ¡Que lo disfruten!",
+	"¡Qué tema! Eso fue %P. Pero no se muevan, que en Radio Chatcito la música no para: ahora viene %N.",
+	"Radio Chatcito, la radio de ustedes. Hace un momento sonaba %P. Y ahora, atentos, que llega %N.",
+	"Eso fue %P. Gracias por seguir sintonizados en Radio Chatcito. A continuación, %N.",
+	"Se acabó %P, pero la fiesta sigue aquí, en Radio Chatcito. Prepárense, porque ahora suena %N.",
+	"Ustedes piden, nosotros ponemos. Acaba de sonar %P, y ahora, en Radio Chatcito, %N.",
+	"Seguimos con ustedes en Radio Chatcito. Antes escuchamos %P, y ahora subimos el ánimo con %N.",
+	"Si están sintonizando Radio Chatcito, llegaron en buen momento. Terminó %P y empieza %N. ¡Disfrútenlo!",
+	"Qué bueno que nos acompañan en Radio Chatcito. Dejamos atrás %P y nos vamos con %N.",
+}
+
+var radioRequestPhrases = []string{"pedida por %U", "a pedido de %U", "petición de %U", "que pidió %U"}
+
+// radioPick chooses from n options by a hash of the pair of songs and a salt,
+// so the same transition always says the same thing, and different ones vary.
+func radioPick(previous, next youtube.MusicItem, salt string, n int) int {
+	sum := sha256.Sum256([]byte(salt + "#" + previous.VideoID + ">" + next.VideoID))
+	return int(binary.BigEndian.Uint32(sum[:4]) % uint32(n))
+}
+
+func radioDescribe(item youtube.MusicItem, title string, phrase int) string {
+	text := "«" + title + "»"
+	if artist := radioWords(item.Artist); artist != "" {
+		text += ", de " + artist
+	}
+	if user := radioWords(item.RequestedBy); user != "" {
+		text += ", " + strings.ReplaceAll(radioRequestPhrases[phrase], "%U", user)
+	}
+	return text
+}
+
+// radioAnnouncement is a short Spanish link between two songs. It varies from
+// one transition to another but is stable for the same pair.
 func radioAnnouncement(previous, next youtube.MusicItem) string {
 	previousTitle, nextTitle := radioWords(previous.Title), radioWords(next.Title)
 	if previousTitle == "" || nextTitle == "" {
 		return ""
 	}
-	line := "Acabamos de escuchar «" + previousTitle + "»"
-	if artist := radioWords(previous.Artist); artist != "" {
-		line += ", de " + artist
-	}
-	if user := radioWords(previous.RequestedBy); user != "" {
-		line += ", pedida por " + user
-	}
-	line += ". Seguimos aquí, en Radio Chatcito. Ahora escuchamos «" + nextTitle + "»"
-	if artist := radioWords(next.Artist); artist != "" {
-		line += ", de " + artist
-	}
-	if user := radioWords(next.RequestedBy); user != "" {
-		line += ", pedida por " + user
-	}
-	return line + ". ¡Gracias por acompañarnos!"
+	script := radioScripts[radioPick(previous, next, "script", len(radioScripts))]
+	script = strings.Replace(script, "%P", radioDescribe(previous, previousTitle, radioPick(previous, next, "previous", len(radioRequestPhrases))), 1)
+	return strings.Replace(script, "%N", radioDescribe(next, nextTitle, radioPick(previous, next, "next", len(radioRequestPhrases))), 1)
 }
 
 func radioWords(text string) string {

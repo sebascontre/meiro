@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -271,5 +272,29 @@ func TestGoogleSpeech(t *testing.T) {
 	}
 	if _, err := googleSpeech(context.Background(), server.URL, "bad", "hola"); err == nil || !strings.Contains(err.Error(), "API key not valid") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRadioAnnouncementVariesButIsStablePerPair(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 40; i++ {
+		previous := youtube.MusicItem{VideoID: fmt.Sprintf("p%d", i), Title: "Uno", Artist: "A", RequestedBy: "ana"}
+		next := youtube.MusicItem{VideoID: fmt.Sprintf("n%d", i), Title: "Dos", RequestedBy: "bob"}
+		line := radioAnnouncement(previous, next)
+		if line != radioAnnouncement(previous, next) {
+			t.Fatal("announcement changed for the same pair")
+		}
+		for _, part := range []string{"Uno", "Dos", "ana", "bob", "Radio Chatcito"} {
+			if !strings.Contains(line, part) {
+				t.Fatalf("%q does not contain %q", line, part)
+			}
+		}
+		if strings.Contains(line, "%") {
+			t.Fatalf("unfilled placeholder in %q", line)
+		}
+		seen[line] = true
+	}
+	if len(seen) < 15 {
+		t.Errorf("only %d different announcements in 40 transitions", len(seen))
 	}
 }
