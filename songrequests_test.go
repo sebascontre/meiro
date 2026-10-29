@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -197,5 +199,18 @@ func TestPickSongPrefersTheOfficialRecording(t *testing.T) {
 	}
 	if _, ok := pickSong([]youtube.MusicItem{long}); ok {
 		t.Error("picked an hour-long loop")
+	}
+}
+
+func TestDiscardRadioClipRemovesTheFile(t *testing.T) {
+	a := newTestApp(t)
+	path := filepath.Join(t.TempDir(), "clip.mp3")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.requests.clipLine, a.requests.clipPath = "line", path
+	a.discardRadioClip()
+	if _, err := os.Stat(path); !os.IsNotExist(err) || a.requests.clipLine != "" || a.requests.clipPath != "" {
+		t.Fatalf("clip kept: %v %q %q", err, a.requests.clipLine, a.requests.clipPath)
 	}
 }

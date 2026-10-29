@@ -164,7 +164,11 @@ func (a *app) following() (int, youtube.MusicItem, bool) {
 // every poll and after anything that can change what follows.
 func (a *app) syncPreload() {
 	nextIndex, next, ok := a.following()
+	if !ok || !a.radioPlanned(nextIndex, next) {
+		a.discardRadioClip()
+	}
 	if ok && a.radioPlanned(nextIndex, next) {
+		a.prefetchRadio(next)
 		a.preload.stop()
 		if a.player.Preloaded() != "" {
 			a.player.CancelPreload()

@@ -264,6 +264,7 @@ func (a *app) openAudioCache() {
 func (a *app) shutdown() {
 	a.requests.stop()
 	a.requests.radio.stop()
+	a.discardRadioClip()
 	a.requests.tokenTask.stop()
 	a.requests.tokenLoad.stop()
 	a.notificationArtwork.stop()

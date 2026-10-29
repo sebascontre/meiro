@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -58,7 +59,12 @@ type songRequests struct {
 	tokenLoad             task
 	radio                 task
 	radioRoll             func() bool
-	speakRadio            func(context.Context, string) error
+	speakRadio            func(context.Context, string, string) error
+	// clipLine is the announcement whose audio is fetched ahead, kept in
+	// clipPath once ready; clipLoad is the fetch in flight.
+	clipLine, clipPath string
+	clipLoad           task
+	fetchClip          func(context.Context, string) (string, error)
 	// channelText is what the channel field holds, and channelError what was
 	// wrong with the last one typed.
 	channelText, channelError string
@@ -220,12 +226,17 @@ func (a *app) radioTransition(previous, next youtube.MusicItem, nextIndex int) b
 		return false
 	}
 	currentID, currentIndex, nextID := previous.VideoID, a.queue.index, next.VideoID
+	clip := ""
+	if a.requests.clipLine == line {
+		clip, a.requests.clipPath = a.requests.clipPath, ""
+	}
+	a.discardRadioClip()
 	speak := a.requests.speakRadio
 	if speak == nil {
 		speak = a.speakRadio
 	}
 	startTask(a, &a.requests.radio, 45*time.Second, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, speak(ctx, line)
+		return struct{}{}, speak(ctx, line, clip)
 	}, func(_ struct{}, err error) {
 		if err != nil {
 			log.Printf("speaking Twitch song request transition: %v", err)
@@ -237,6 +248,51 @@ func (a *app) radioTransition(previous, next youtube.MusicItem, nextIndex int) b
 		a.startNext(a.queue.moveTo(nextIndex))
 	})
 	return true
+}
+
+// radioPrefetchLead is how long before a song ends its announcement is fetched.
+const radioPrefetchLead = 45 * time.Second
+
+// discardRadioClip drops any announcement audio fetched ahead.
+func (a *app) discardRadioClip() {
+	a.requests.clipLoad.stop()
+	if a.requests.clipPath != "" {
+		_ = os.Remove(a.requests.clipPath)
+	}
+	a.requests.clipLine, a.requests.clipPath = "", ""
+}
+
+// prefetchRadio fetches the announcement audio shortly before the song ends,
+// so the break starts without waiting on the network.
+func (a *app) prefetchRadio(next youtube.MusicItem) {
+	line := radioAnnouncement(a.current, next)
+	if line == "" || a.requests.speakRadio != nil && a.requests.fetchClip == nil {
+		return
+	}
+	if a.requests.clipLine != line {
+		a.discardRadioClip()
+	}
+	if a.requests.clipLine == line || a.total <= 0 || !a.player.Playing() || a.total-a.player.Position() > radioPrefetchLead {
+		return
+	}
+	a.requests.clipLine = line
+	fetch := a.requests.fetchClip
+	if fetch == nil {
+		fetch = fetchRadioClip
+	}
+	startTask(a, &a.requests.clipLoad, 20*time.Second, func(ctx context.Context) (string, error) {
+		return fetch(ctx, line)
+	}, func(path string, err error) {
+		if err != nil {
+			log.Printf("fetching the radio voice ahead of time: %v", err)
+			return
+		}
+		if a.requests.clipLine != line {
+			_ = os.Remove(path)
+			return
+		}
+		a.requests.clipPath = path
+	})
 }
 
 func (a *app) radioPlanned(nextIndex int, next youtube.MusicItem) bool {

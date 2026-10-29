@@ -19,40 +19,55 @@ import (
 )
 
 // speakRadio prefers a neural voice from Microsoft Edge's online service and
-// falls back to the system voice when it is unreachable.
-func (a *app) speakRadio(ctx context.Context, text string) error {
-	if err := speakOnline(ctx, text); err != nil {
-		log.Printf("online radio voice unavailable, using the system voice: %v", err)
+// falls back to the system voice when it is unreachable. clip is audio already
+// fetched ahead of time, or "".
+func (a *app) speakRadio(ctx context.Context, text, clip string) error {
+	if clip != "" {
+		defer os.Remove(clip)
+	} else {
+		var err error
+		if clip, err = fetchRadioClip(ctx, text); err != nil {
+			log.Printf("online radio voice unavailable, using the system voice: %v", err)
+			return speakRadioLine(ctx, text)
+		}
+		defer os.Remove(clip)
+	}
+	if err := playRadioClip(ctx, clip); err != nil {
+		log.Printf("playing the online radio voice failed, using the system voice: %v", err)
 		return speakRadioLine(ctx, text)
 	}
 	return nil
 }
 
-func speakOnline(ctx context.Context, text string) error {
+// fetchRadioClip synthesizes text into a temporary MP3 the caller removes.
+func fetchRadioClip(ctx context.Context, text string) (string, error) {
 	fetch, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	audio, err := edgeSpeech(fetch, text, edgeVoice)
 	if err != nil {
-		return err
+		return "", err
 	}
 	file, err := os.CreateTemp("", "meiro-radio-*.mp3")
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer os.Remove(file.Name())
 	_, err = file.Write(audio)
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
-		return err
+		os.Remove(file.Name())
+		return "", err
 	}
+	return file.Name(), nil
+}
+
+func playRadioClip(ctx context.Context, path string) error {
 	voice := player.New(playerOptions()...)
 	defer voice.Stop()
-	if err := voice.PlayContext(ctx, file.Name()); err != nil {
+	if err := voice.PlayContext(ctx, path); err != nil {
 		return err
 	}
-	// Give ffmpeg a moment to start before treating silence as the end.
 	for started := time.Now(); ; {
 		select {
 		case <-ctx.Done():
