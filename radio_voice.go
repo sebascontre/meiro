@@ -6,12 +6,67 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 	"unicode/utf16"
+
+	"github.com/elianiva/meiro/player"
 )
+
+// speakRadio prefers a neural voice from Microsoft Edge's online service and
+// falls back to the system voice when it is unreachable.
+func (a *app) speakRadio(ctx context.Context, text string) error {
+	if err := speakOnline(ctx, text); err != nil {
+		log.Printf("online radio voice unavailable, using the system voice: %v", err)
+		return speakRadioLine(ctx, text)
+	}
+	return nil
+}
+
+func speakOnline(ctx context.Context, text string) error {
+	fetch, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	audio, err := edgeSpeech(fetch, text, edgeVoice)
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp("", "meiro-radio-*.mp3")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	_, err = file.Write(audio)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	voice := player.New(playerOptions()...)
+	defer voice.Stop()
+	if err := voice.PlayContext(ctx, file.Name()); err != nil {
+		return err
+	}
+	// Give ffmpeg a moment to start before treating silence as the end.
+	for started := time.Now(); ; {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+		if voice.Ended() {
+			return nil
+		}
+		if time.Since(started) > 30*time.Second {
+			return errors.New("the radio voice did not finish playing")
+		}
+	}
+}
 
 var spanishVoice = regexp.MustCompile(`(?m)^(.+?)\s+es[_-][A-Z0-9_]+\s+#`)
 

@@ -222,7 +222,7 @@ func (a *app) radioTransition(previous, next youtube.MusicItem, nextIndex int) b
 	currentID, currentIndex, nextID := previous.VideoID, a.queue.index, next.VideoID
 	speak := a.requests.speakRadio
 	if speak == nil {
-		speak = speakRadioLine
+		speak = a.speakRadio
 	}
 	startTask(a, &a.requests.radio, 45*time.Second, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, speak(ctx, line)
@@ -641,7 +641,7 @@ func (a *app) songRequestsCard(c *ui.Context) {
 				}
 			})
 			if a.settings.SongRequests {
-				m3.Text(c, m3.BodyMedium, "Radio Chatcito will occasionally introduce one requested song before the next, speaking only between songs. macOS and Windows need an installed Spanish voice; Linux needs espeak-ng or Speech Dispatcher.").TextColor(sc.OnSurfaceVariant).MaxLines(3)
+				m3.Text(c, m3.BodyMedium, "Radio Chatcito will occasionally introduce one requested song before the next, speaking only between songs. It uses a free Microsoft Edge neural voice online, falling back to an installed Spanish system voice when offline.").TextColor(sc.OnSurfaceVariant).MaxLines(3)
 			}
 			switch {
 			case !a.settings.SongRequests:
