@@ -65,6 +65,11 @@ type songRequests struct {
 	clipLine, clipPath string
 	clipLoad           task
 	fetchClip          func(context.Context, string) (string, error)
+	// ttsKey is the Google Cloud Text-to-Speech API key; without one Radio
+	// Chatcito stays silent.
+	ttsKey, ttsText, ttsError string
+	ttsStore                  secretfile.File
+	ttsLoad                   task
 	// channelText is what the channel field holds, and channelError what was
 	// wrong with the last one typed.
 	channelText, channelError string
@@ -278,7 +283,8 @@ func (a *app) prefetchRadio(next youtube.MusicItem) {
 	a.requests.clipLine = line
 	fetch := a.requests.fetchClip
 	if fetch == nil {
-		fetch = fetchRadioClip
+		key := a.requests.ttsKey
+		fetch = func(ctx context.Context, line string) (string, error) { return fetchRadioClip(ctx, key, line) }
 	}
 	startTask(a, &a.requests.clipLoad, 20*time.Second, func(ctx context.Context) (string, error) {
 		return fetch(ctx, line)
@@ -296,7 +302,7 @@ func (a *app) prefetchRadio(next youtube.MusicItem) {
 }
 
 func (a *app) radioPlanned(nextIndex int, next youtube.MusicItem) bool {
-	if !a.settings.SongRequests || nextIndex < 0 {
+	if !a.settings.SongRequests || nextIndex < 0 || a.requests.ttsKey == "" {
 		a.requests.radioPair, a.requests.radioChosen = "", false
 		return false
 	}
@@ -501,6 +507,50 @@ func (a *app) authorizeTwitchToken(token string, save bool) {
 		}
 		r.token, r.login, r.tokenText, r.tokenError = token, login, "", ""
 		a.syncSongRequests()
+	})
+}
+
+// loadTTSKey reads the saved Google Text-to-Speech key.
+func (a *app) loadTTSKey(store secretfile.File) {
+	r := &a.requests
+	r.ttsStore = store
+	startTask(a, &r.ttsLoad, 30*time.Second, func(ctx context.Context) (string, error) {
+		return store.Load(ctx)
+	}, func(key string, err error) {
+		if errors.Is(err, secretfile.ErrNotSaved) {
+			return
+		}
+		if err != nil {
+			log.Printf("reading the Text-to-Speech key: %v", err)
+			r.ttsError = "Could not read the saved Text-to-Speech key."
+			return
+		}
+		r.ttsKey = key
+		a.syncPreload()
+	})
+}
+
+// saveTTSKey keeps a pasted key, or removes the saved one when it is empty.
+func (a *app) saveTTSKey(text string) {
+	r := &a.requests
+	key := cleanSpeechKey(text)
+	r.ttsKey, r.ttsText, r.ttsError = key, "", ""
+	a.discardRadioClip()
+	a.syncPreload()
+	store := r.ttsStore
+	if store.Path == "" {
+		return
+	}
+	spawn(a, func() error {
+		if key == "" {
+			return store.Delete(context.Background())
+		}
+		return store.Save(context.Background(), key)
+	}, func(err error) {
+		if err != nil {
+			log.Printf("storing the Text-to-Speech key: %v", err)
+			r.ttsError = "Could not store the Text-to-Speech key."
+		}
 	})
 }
 
@@ -712,9 +762,32 @@ func (a *app) songRequestsCard(c *ui.Context) {
 					m3.Text(c, m3.BodyMedium, a.requests.tokenError).TextColor(sc.Error).MaxLines(3)
 				}
 			})
-			if a.settings.SongRequests {
-				m3.Text(c, m3.BodyMedium, "Radio Chatcito will occasionally introduce one requested song before the next, speaking only between songs. It uses a free Microsoft Edge neural voice online, falling back to an installed Spanish system voice when offline.").TextColor(sc.OnSurfaceVariant).MaxLines(3)
-			}
+			ui.Column(c).Gap(8).Children(func() {
+				settingLabel(c, "Radio Chatcito voice", "Paste a Google Cloud Text-to-Speech API key. Radio Chatcito will occasionally introduce a requested song before the next, speaking only between songs, and stays silent without a key.")
+				if a.requests.ttsKey != "" {
+					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+						m3.Text(c, m3.BodyMedium, "Google voice key saved").TextColor(sc.OnSurfaceVariant).Grow(1)
+						if m3.Button(c, m3.ButtonSpec{Label: "Remove", Kind: m3.Tonal, Size: m3.Medium56, Key: "tts-remove"}).Clicked() {
+							a.saveTTSKey("")
+						}
+					})
+				} else {
+					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+						key := ui.TextInputBase(c.Key("tts-key"), &a.requests.ttsText).
+							Width(360).Height(48).Shrink(1).Padding(12).Radius(m3.Medium).Background(sc.SurfaceContainerHigh).
+							TextColor(sc.OnSurface).FontSize(16).Label("Google API key").Placeholder("API key").Password()
+						if key.Submitted() {
+							a.saveTTSKey(a.requests.ttsText)
+						}
+						if m3.Button(c, m3.ButtonSpec{Label: "Save", Kind: m3.Filled, Size: m3.Medium56, Key: "tts-save"}).Clicked() {
+							a.saveTTSKey(a.requests.ttsText)
+						}
+					})
+				}
+				if a.requests.ttsError != "" {
+					m3.Text(c, m3.BodyMedium, a.requests.ttsError).TextColor(sc.Error).MaxLines(3)
+				}
+			})
 			switch {
 			case !a.settings.SongRequests:
 			case twitch.Channel(a.settings.TwitchChannel) == "":

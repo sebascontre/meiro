@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Twitch chat can request songs.** Turn on Song requests in Settings and enter your channel: when a viewer types `!sr` and a song or a YouTube link, Meiro finds it on YouTube Music and adds it to the queue, which shows who asked. Each viewer can have up to three songs waiting. Optionally connect a Twitch token to reply with the song's position in the queue; Meiro keeps the token separate from Settings and encrypts it when the system has a credential store.
-- **Radio Chatcito occasionally introduces chat-requested songs.** Between two requested songs, a free Microsoft Edge neural Spanish voice (with the installed system voice as an offline fallback) may say what just played, who requested it, and what is coming up. It only speaks after a song ends and only while Song requests is on.
+- **Radio Chatcito occasionally introduces chat-requested songs.** Between two requested songs, a Google Cloud Text-to-Speech Spanish voice, played through Meiro's own audio output with an API key set in Settings, may say what just played, who requested it, and what is coming up. It only speaks after a song ends and only while Song requests is on.
 - **Tracks can crossfade.** A new Playback section in Settings fades the end of a song out while the next one fades in. Choose 1 to 12 seconds, and turn it off to go back to gapless playback.
 
 ### Fixed

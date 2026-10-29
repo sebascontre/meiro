@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,6 +118,7 @@ func TestRadioAnnouncementUsesRequestAndTrackDetails(t *testing.T) {
 func TestRadioPlanningIsStableAndRequestOnly(t *testing.T) {
 	a := newTestApp(t)
 	a.settings.SongRequests = true
+	a.requests.ttsKey = "key"
 	a.current = youtube.MusicItem{VideoID: "previous", RequestedBy: "ana", Kind: youtube.KindTrack}
 	a.queue.items = []youtube.MusicItem{
 		a.current,
@@ -218,6 +223,7 @@ func TestDiscardRadioClipRemovesTheFile(t *testing.T) {
 func TestRadioAlwaysForcesEveryTransition(t *testing.T) {
 	a := newTestApp(t)
 	a.settings.SongRequests = true
+	a.requests.ttsKey = "key"
 	a.current = youtube.MusicItem{VideoID: "a", Title: "A", Kind: youtube.KindTrack}
 	next := youtube.MusicItem{VideoID: "b", Title: "B", Kind: youtube.KindTrack}
 	if a.radioPlanned(1, next) {
@@ -230,5 +236,40 @@ func TestRadioAlwaysForcesEveryTransition(t *testing.T) {
 	a.settings.SongRequests = false
 	if a.radioPlanned(1, next) {
 		t.Fatal("forced while Song requests is off")
+	}
+}
+
+func TestRadioStaysSilentWithoutKey(t *testing.T) {
+	a := newTestApp(t)
+	a.settings.SongRequests, a.settings.RadioAlways = true, true
+	if a.radioPlanned(1, youtube.MusicItem{VideoID: "b"}) {
+		t.Fatal("planned a break with no Text-to-Speech key")
+	}
+}
+
+func TestGoogleSpeech(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("key") != "k" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"message":"API key not valid"}}`))
+			return
+		}
+		var body struct {
+			Input struct{ Text string }
+			Voice struct{ Name string }
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Input.Text != "hola" || body.Voice.Name == "" {
+			t.Errorf("request = %+v", body)
+		}
+		_, _ = w.Write([]byte(`{"audioContent":"` + base64.StdEncoding.EncodeToString([]byte("mp3")) + `"}`))
+	}))
+	defer server.Close()
+	audio, err := googleSpeech(context.Background(), server.URL, "k", "hola")
+	if err != nil || string(audio) != "mp3" {
+		t.Fatalf("audio %q, err %v", audio, err)
+	}
+	if _, err := googleSpeech(context.Background(), server.URL, "bad", "hola"); err == nil || !strings.Contains(err.Error(), "API key not valid") {
+		t.Fatalf("err = %v", err)
 	}
 }

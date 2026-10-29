@@ -452,7 +452,7 @@ func TestARefusedSessionAsksToReconnectAndKeepsThePlays(t *testing.T) {
 		t.Error("requests kept going out with a session Last.fm refused")
 	}
 	a.router.Push("/settings")
-	tt := ui.NewTester(a.view, 1000, 5000)
+	tt := ui.NewTester(a.view, 1000, 6000)
 	tt.Frame()
 	if !tt.HasText("Connect again") {
 		t.Errorf("settings do not ask to reconnect: %q", tt.Texts())
@@ -499,7 +499,7 @@ func TestConnectingPausingAndDisconnectingInSettings(t *testing.T) {
 	var opened []string
 	a.openURL = func(link string) error { opened = append(opened, link); return nil }
 	a.router.Push("/settings")
-	tt := ui.NewTester(a.view, 1000, 5000)
+	tt := ui.NewTester(a.view, 1000, 6000)
 	tt.Frame()
 	if len(f.calls) != 0 {
 		t.Fatalf("Last.fm was called before the user asked: %v", f.calls)
@@ -591,7 +591,7 @@ func TestConnectingCanBeCancelled(t *testing.T) {
 func TestWithoutAnApplicationKeyLastFmCannotBeConnected(t *testing.T) {
 	a := newTestApp(t)
 	a.router.Push("/settings")
-	tt := ui.NewTester(a.view, 1000, 5000)
+	tt := ui.NewTester(a.view, 1000, 6000)
 	tt.Frame()
 	if !tt.HasText("has no Last.fm application key") {
 		t.Errorf("settings do not say why: %q", tt.Texts())

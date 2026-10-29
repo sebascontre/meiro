@@ -1,49 +1,80 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
-	"regexp"
-	"runtime"
 	"strings"
 	"time"
-	"unicode/utf16"
 
 	"github.com/elianiva/meiro/player"
 )
 
-// speakRadio prefers a neural voice from Microsoft Edge's online service and
-// falls back to the system voice when it is unreachable. clip is audio already
-// fetched ahead of time, or "".
-func (a *app) speakRadio(ctx context.Context, text, clip string) error {
-	if clip != "" {
-		defer os.Remove(clip)
-	} else {
-		var err error
-		if clip, err = fetchRadioClip(ctx, text); err != nil {
-			log.Printf("online radio voice unavailable, using the system voice: %v", err)
-			return speakRadioLine(ctx, text)
+const (
+	googleSpeechURL   = "https://texttospeech.googleapis.com/v1/text:synthesize"
+	googleSpeechVoice = "es-US-Neural2-B"
+	googleSpeechLang  = "es-US"
+	maxSpeechAudio    = 4 << 20
+)
+
+// googleSpeech synthesizes text with Google Cloud Text-to-Speech and returns
+// MP3 audio.
+func googleSpeech(ctx context.Context, endpoint, apiKey, text string) ([]byte, error) {
+	body, err := json.Marshal(map[string]any{
+		"input":       map[string]string{"text": text},
+		"voice":       map[string]string{"languageCode": googleSpeechLang, "name": googleSpeechVoice},
+		"audioConfig": map[string]any{"audioEncoding": "MP3", "speakingRate": 1.0, "pitch": -1.0},
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"?key="+url.QueryEscape(apiKey), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, errors.New("could not reach Google Text-to-Speech")
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSpeechAudio*2))
+	if err != nil {
+		return nil, fmt.Errorf("reading Google Text-to-Speech: %w", err)
+	}
+	var reply struct {
+		AudioContent string `json:"audioContent"`
+		Error        struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(data, &reply)
+	if resp.StatusCode != http.StatusOK {
+		message := reply.Error.Message
+		if message == "" {
+			message = resp.Status
 		}
-		defer os.Remove(clip)
+		return nil, fmt.Errorf("Google Text-to-Speech: %s", message)
 	}
-	if err := playRadioClip(ctx, clip); err != nil {
-		log.Printf("playing the online radio voice failed, using the system voice: %v", err)
-		return speakRadioLine(ctx, text)
+	audio, err := base64.StdEncoding.DecodeString(reply.AudioContent)
+	if err != nil || len(audio) == 0 {
+		return nil, errors.New("Google Text-to-Speech returned no audio")
 	}
-	return nil
+	return audio, nil
 }
 
 // fetchRadioClip synthesizes text into a temporary MP3 the caller removes.
-func fetchRadioClip(ctx context.Context, text string) (string, error) {
+func fetchRadioClip(ctx context.Context, apiKey, text string) (string, error) {
 	fetch, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	audio, err := edgeSpeech(fetch, text, edgeVoice)
+	audio, err := googleSpeech(fetch, googleSpeechURL, apiKey, text)
 	if err != nil {
 		return "", err
 	}
@@ -60,6 +91,19 @@ func fetchRadioClip(ctx context.Context, text string) (string, error) {
 		return "", err
 	}
 	return file.Name(), nil
+}
+
+// speakRadio plays the announcement through Meiro's own audio output. clip is
+// audio already fetched ahead of time, or "".
+func (a *app) speakRadio(ctx context.Context, text, clip string) error {
+	if clip == "" {
+		var err error
+		if clip, err = fetchRadioClip(ctx, a.requests.ttsKey, text); err != nil {
+			return err
+		}
+	}
+	defer os.Remove(clip)
+	return playRadioClip(ctx, clip)
 }
 
 func playRadioClip(ctx context.Context, path string) error {
@@ -83,94 +127,5 @@ func playRadioClip(ctx context.Context, path string) error {
 	}
 }
 
-var spanishVoice = regexp.MustCompile(`(?m)^(.+?)\s+es[_-][A-Z0-9_]+\s+#`)
-
-// speakRadioLine uses a Spanish voice already installed on the system. The
-// caller runs it off the UI thread and only while a song has ended.
-func speakRadioLine(ctx context.Context, text string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		return speakMac(ctx, text)
-	case "windows":
-		return speakWindows(ctx, text)
-	case "linux":
-		return speakLinux(ctx, text)
-	default:
-		return fmt.Errorf("radio voice is not supported on %s", runtime.GOOS)
-	}
-}
-
-func speakMac(ctx context.Context, text string) error {
-	voices, err := exec.CommandContext(ctx, "say", "-v", "?").Output()
-	if err != nil {
-		return fmt.Errorf("listing installed Mac voices: %w", err)
-	}
-	match := spanishVoice.FindSubmatch(voices)
-	if len(match) < 2 {
-		return errors.New("install a Spanish voice in macOS System Settings > Accessibility > Spoken Content")
-	}
-	voice := strings.TrimSpace(string(match[1]))
-	if err := exec.CommandContext(ctx, "say", "-v", voice, "-r", "170", text).Run(); err != nil {
-		return fmt.Errorf("speaking with the Spanish Mac voice: %w", err)
-	}
-	return nil
-}
-
-func speakWindows(ctx context.Context, text string) error {
-	powershell, err := exec.LookPath("powershell.exe")
-	if err != nil {
-		powershell, err = exec.LookPath("pwsh.exe")
-	}
-	if err != nil {
-		return errors.New("PowerShell is required for the Windows radio voice")
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(text))
-	script := "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Speech; " +
-		"$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
-		"$v=$s.GetInstalledVoices() | Where-Object {$_.VoiceInfo.Culture.Name -like 'es-*'} | Select-Object -First 1; " +
-		"if ($null -eq $v) {throw 'Install a Spanish speech voice in Windows Settings.'}; " +
-		"$s.SelectVoice($v.VoiceInfo.Name); $s.Rate=0; " +
-		"$s.Speak([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + "'))); $s.Dispose()"
-	encodedScript := utf16.Encode([]rune(script))
-	utf16Bytes := make([]byte, len(encodedScript)*2)
-	for i, unit := range encodedScript {
-		binary.LittleEndian.PutUint16(utf16Bytes[i*2:], unit)
-	}
-	command := exec.CommandContext(ctx, powershell, "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", base64.StdEncoding.EncodeToString(utf16Bytes))
-	if output, err := command.CombinedOutput(); err != nil {
-		message := strings.TrimSpace(string(output))
-		if message != "" {
-			return fmt.Errorf("speaking with the Windows Spanish voice: %s", message)
-		}
-		return fmt.Errorf("speaking with the Windows Spanish voice: %w", err)
-	}
-	return nil
-}
-
-func speakLinux(ctx context.Context, text string) error {
-	if binary, err := exec.LookPath("espeak-ng"); err == nil {
-		return runVoiceCommand(ctx, binary, text, "-v", "es-la", "-s", "155", "--stdin")
-	}
-	if binary, err := exec.LookPath("espeak"); err == nil {
-		return runVoiceCommand(ctx, binary, text, "-v", "es-la", "-s", "155", "--stdin")
-	}
-	if binary, err := exec.LookPath("spd-say"); err == nil {
-		return runVoiceCommand(ctx, binary, "", "-l", "es", "-r", "-15", text)
-	}
-	return errors.New("install espeak-ng or Speech Dispatcher to use the Spanish radio voice")
-}
-
-func runVoiceCommand(ctx context.Context, command, input string, args ...string) error {
-	cmd := exec.CommandContext(ctx, command, args...)
-	if input != "" {
-		cmd.Stdin = strings.NewReader(input)
-	}
-	if output, err := cmd.CombinedOutput(); err != nil {
-		message := strings.TrimSpace(string(output))
-		if message != "" {
-			return fmt.Errorf("radio voice: %s", message)
-		}
-		return fmt.Errorf("radio voice: %w", err)
-	}
-	return nil
-}
+// cleanSpeechKey trims a pasted API key.
+func cleanSpeechKey(text string) string { return strings.TrimSpace(text) }
