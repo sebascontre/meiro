@@ -100,3 +100,20 @@ func TestVideoLinkID(t *testing.T) {
 		}
 	}
 }
+
+func TestPickSongPrefersTheOfficialRecording(t *testing.T) {
+	long := youtube.MusicItem{VideoID: "long", Title: "Get Lucky (10 Hour Loop)", Kind: youtube.KindVideo, Duration: "10:00:00"}
+	live := youtube.MusicItem{VideoID: "live", Title: "Get Lucky (Live)", Kind: youtube.KindVideo, Duration: "5:00"}
+	video := youtube.MusicItem{VideoID: "video", Title: "Daft Punk - Get Lucky (Official Audio)", Kind: youtube.KindVideo, Duration: "6:09"}
+	song := youtube.MusicItem{VideoID: "song", Title: "Get Lucky", Kind: youtube.KindTrack, Duration: "6:09"}
+
+	if got, _ := pickSong([]youtube.MusicItem{long, live, video, song}); got.VideoID != "song" {
+		t.Errorf("picked %q, want the song", got.VideoID)
+	}
+	if got, _ := pickSong([]youtube.MusicItem{long, live, video}); got.VideoID != "video" {
+		t.Errorf("picked %q, want the official video", got.VideoID)
+	}
+	if _, ok := pickSong([]youtube.MusicItem{long}); ok {
+		t.Error("picked an hour-long loop")
+	}
+}

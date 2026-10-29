@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -230,8 +231,9 @@ func findLinked(ctx context.Context, client *youtube.Client, videoID string) (yo
 	return youtube.MusicItem{}, errors.New("no song found")
 }
 
-// findSong is the song a search of YouTube Music leads to: a song before a
-// music video, and never an album, a playlist or an episode.
+// findSong is the song a search of YouTube Music leads to. It looks in the
+// search's Songs category first, which holds the official recordings, and
+// only falls back to the other results, ranked, when that has none.
 func findSong(ctx context.Context, client *youtube.Client, query string) (youtube.MusicItem, error) {
 	if id := videoLinkID(query); id != "" {
 		return findLinked(ctx, client, id)
@@ -240,22 +242,73 @@ func findSong(ctx context.Context, client *youtube.Client, query string) (youtub
 	if err != nil {
 		return youtube.MusicItem{}, err
 	}
-	var video youtube.MusicItem
-	for _, item := range append([]youtube.MusicItem{result.TopResult}, result.Items...) {
+	for _, filter := range result.Filters {
+		if strings.EqualFold(filter.Label, "Songs") && filter.Params != "" {
+			songs, err := client.Search(ctx, query, youtube.SearchOptions{Params: filter.Params})
+			if err == nil {
+				if item, ok := pickSong(songs.Items); ok {
+					return item, nil
+				}
+			}
+			break
+		}
+	}
+	if item, ok := pickSong(append([]youtube.MusicItem{result.TopResult}, result.Items...)); ok {
+		return item, nil
+	}
+	return youtube.MusicItem{}, errors.New("no song found")
+}
+
+// unofficialWords mark a version that is not the recording asked for.
+var unofficialWords = regexp.MustCompile(`(?i)\b(live|cover|remix|karaoke|instrumental|nightcore|slowed|reverb|sped up|speed up|8d|1 hour|10 hours?|loop|reaction|tutorial|lesson|mashup|bass boosted)\b`)
+
+// maxRequestDuration is the longest track a request may add, which rules out
+// hour-long loops and mixes.
+const maxRequestDuration = 12 * time.Minute
+
+// pickSong is the track to queue among search results. Songs come before
+// videos, songs and videos with the marks of a copy come last, and the order
+// YouTube gave breaks ties.
+func pickSong(items []youtube.MusicItem) (youtube.MusicItem, bool) {
+	best, bestScore := youtube.MusicItem{}, -1000
+	for i, item := range items {
 		if !item.IsTrack() || item.IsEpisode() {
 			continue
 		}
+		score := -i
 		if !item.IsVideo() {
-			return item, nil
+			score += 100
 		}
-		if video.VideoID == "" {
-			video = item
+		if strings.Contains(strings.ToLower(item.Title), "official") {
+			score += 20
+		}
+		if unofficialWords.MatchString(item.Title) {
+			score -= 60
+		}
+		if d := parseClock(item.Duration); d > maxRequestDuration {
+			score -= 200
+		}
+		if score > bestScore {
+			best, bestScore = item, score
 		}
 	}
-	if video.VideoID == "" {
-		return video, errors.New("no song found")
+	if best.VideoID == "" || bestScore < -150 {
+		return youtube.MusicItem{}, false
 	}
-	return video, nil
+	return best, true
+}
+
+// parseClock reads a length such as "4:09" or "1:02:03", or returns 0.
+func parseClock(text string) time.Duration {
+	total := time.Duration(0)
+	for _, part := range strings.Split(strings.TrimSpace(text), ":") {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return 0
+		}
+		total = total*60 + time.Duration(n)*time.Second
+	}
+	return total
 }
 
 // songRequestsCard is where the channel whose chat asks for songs is set.
