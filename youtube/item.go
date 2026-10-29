@@ -146,6 +146,9 @@ type MusicItem struct {
 	Kind          ItemKind `json:"kind,omitempty"`
 	Duration      string   `json:"duration,omitempty"`
 	Thumbnail     string   `json:"thumbnail,omitempty"`
+	// RequestedBy is the chatter who asked for the track as a song request,
+	// or "" for a track the user chose.
+	RequestedBy string `json:"requestedBy,omitempty"`
 	// Description is what a show's page says of an episode, on one line. It
 	// is not saved with the item: it runs long, and only the show's page
 	// shows it.

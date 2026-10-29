@@ -17,7 +17,7 @@ import (
 func TestTheSoundCardSwitchAndPreset(t *testing.T) {
 	a := newTestApp(t)
 	a.router.Push("/settings")
-	tt := ui.NewTester(a.view, 1000, 4400)
+	tt := ui.NewTester(a.view, 1000, 5000)
 	tt.Frame()
 
 	// The preset sits under the switch, and disabled presets ignore clicks,
@@ -69,7 +69,7 @@ func TestCrossfadeSwitchAndSliderReachThePlayerAndSurviveARestart(t *testing.T) 
 	a := newTestApp(t)
 	a.saver.Path = path
 	a.router.Push("/settings")
-	tt := ui.NewTester(a.view, 1000, 4400)
+	tt := ui.NewTester(a.view, 1000, 5000)
 	tt.Frame()
 	if got := a.player.Crossfade(); got != 0 {
 		t.Fatalf("crossfade starts at %v, want off", got)

@@ -148,8 +148,8 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 				if described {
 					m3.Text(c, m3.BodyMedium, item.Description).MaxLines(2).TextColor(subColour).Padding(2, 0)
 				}
-				if item.Subtitle != "" {
-					m3.Text(c, subtitleRole, item.Subtitle).SingleLine().TextColor(subColour)
+				if subtitle := rowSubtitle(item); subtitle != "" {
+					m3.Text(c, subtitleRole, subtitle).SingleLine().TextColor(subColour)
 				}
 			})
 			switch {
@@ -222,4 +222,16 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 			a.activate(item, queue)
 		}
 	}
+}
+
+// rowSubtitle is the line under a row's title: the details of the item, and
+// who asked for it when a chatter did.
+func rowSubtitle(item youtube.MusicItem) string {
+	switch {
+	case item.RequestedBy == "":
+		return item.Subtitle
+	case item.Subtitle == "":
+		return "Requested by " + item.RequestedBy
+	}
+	return item.Subtitle + " · Requested by " + item.RequestedBy
 }

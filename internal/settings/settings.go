@@ -82,6 +82,11 @@ type Settings struct {
 	LastFMUser string `json:"lastfmUser,omitempty"`
 	// LastFMPaused keeps the account connected and stops scrobbling.
 	LastFMPaused bool `json:"lastfmPaused,omitempty"`
+	// SongRequests lets the chat of TwitchChannel add songs to the queue
+	// with !sr.
+	SongRequests bool `json:"songRequests,omitempty"`
+	// TwitchChannel is the login of the channel whose chat is read.
+	TwitchChannel string `json:"twitchChannel,omitempty"`
 	// Shortcuts holds the keyboard shortcuts the user changed, by action ID
 	// (see package keymap), written as "Shift+Cmd+K". An action not listed
 	// keeps its default.

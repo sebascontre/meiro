@@ -497,6 +497,7 @@ func (a *app) setupDesktop() {
 	a.syncDesktop()
 	a.syncShortcut()
 	a.desktop.setOpenAtLogin(a.settings.OpenAtLogin)
+	a.syncSongRequests()
 }
 
 // syncDesktop lines the sleep assertion and the tray up with playback. Every

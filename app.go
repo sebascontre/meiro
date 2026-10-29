@@ -124,6 +124,9 @@ type app struct {
 	// once by the playlist picker.
 	knownPlaylists knownPlaylists
 
+	// requests is the reading of a Twitch chat for song requests.
+	requests songRequests
+
 	playback
 	nowPlaying nowPlayingState
 
