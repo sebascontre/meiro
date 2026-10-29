@@ -6,11 +6,17 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const address = "irc.chat.twitch.tv:6697"
@@ -102,6 +108,73 @@ func Run(ctx context.Context, channel string, onMessage func(Message), onState f
 	run(ctx, dial, channel, onMessage, onState, time.Second, time.Minute)
 }
 
+// Validate checks a Twitch access token and reports the account login. The
+// token must allow reading and sending chat messages.
+func Validate(ctx context.Context, token string) (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	return validate(ctx, token, client, "https://id.twitch.tv/oauth2/validate")
+}
+
+func validate(ctx context.Context, token string, client *http.Client, endpoint string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "OAuth "+strings.TrimPrefix(strings.TrimSpace(token), "oauth:"))
+	response, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("validating Twitch token: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", errors.New("Twitch rejected the token; check that it is valid")
+	}
+	var result struct {
+		Login  string   `json:"login"`
+		Scopes []string `json:"scopes"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&result); err != nil {
+		return "", fmt.Errorf("reading Twitch token details: %w", err)
+	}
+	scopes := make(map[string]bool, len(result.Scopes))
+	for _, scope := range result.Scopes {
+		scopes[scope] = true
+	}
+	if !scopes["chat:read"] || !scopes["chat:edit"] {
+		return "", errors.New("Twitch token needs the chat:read and chat:edit permissions")
+	}
+	if Channel(result.Login) == "" {
+		return "", errors.New("Twitch did not identify the account for this token")
+	}
+	return strings.ToLower(result.Login), nil
+}
+
+// RunAuthenticated reads a channel's chat and provides a sender after joining.
+// The token must have chat:read and chat:edit permissions.
+func RunAuthenticated(ctx context.Context, channel, login, token string, onMessage func(Message), onState func(bool), onSend func(func(string) error)) {
+	wait := time.Second
+	for ctx.Err() == nil {
+		joined := sessionWithAuth(ctx, dial, channel, login, token, onMessage, onState, onSend)
+		if onSend != nil {
+			onSend(nil)
+		}
+		if joined {
+			if onState != nil {
+				onState(false)
+			}
+			wait = time.Second
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		wait = min(wait*2, time.Minute)
+	}
+}
+
 func run(ctx context.Context, open Dialer, channel string, onMessage func(Message), onState func(bool), minWait, maxWait time.Duration) {
 	wait := minWait
 	for ctx.Err() == nil {
@@ -126,6 +199,10 @@ func run(ctx context.Context, open Dialer, channel string, onMessage func(Messag
 // session is one connection, which ends when it fails or ctx ends. It reports
 // whether the channel was joined.
 func session(ctx context.Context, open Dialer, channel string, onMessage func(Message), onState func(bool)) (joined bool) {
+	return sessionWithAuth(ctx, open, channel, "", "", onMessage, onState, nil)
+}
+
+func sessionWithAuth(ctx context.Context, open Dialer, channel, login, token string, onMessage func(Message), onState func(bool), onSend func(func(string) error)) (joined bool) {
 	conn, err := open(ctx)
 	if err != nil {
 		return false
@@ -133,14 +210,26 @@ func session(ctx context.Context, open Dialer, channel string, onMessage func(Me
 	defer conn.Close()
 	defer context.AfterFunc(ctx, func() { conn.Close() })()
 
-	nick := fmt.Sprintf("justinfan%d", 10000+rand.IntN(80000))
-	for _, line := range []string{
-		"CAP REQ :twitch.tv/tags",
-		"PASS SCHMOOPIIE",
-		"NICK " + nick,
-		"JOIN #" + channel,
-	} {
-		if _, err := fmt.Fprintf(conn, "%s\r\n", line); err != nil {
+	nick, password := login, "SCHMOOPIIE"
+	if token != "" {
+		password = "oauth:" + strings.TrimPrefix(strings.TrimSpace(token), "oauth:")
+	} else {
+		nick = fmt.Sprintf("justinfan%d", 10000+rand.IntN(80000))
+	}
+	var writeMu sync.Mutex
+	var chatMu sync.Mutex
+	var nextChatMessage time.Time
+	write := func(line string) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(conn, "%s\r\n", line)
+		return err
+	}
+	for _, line := range []string{"CAP REQ :twitch.tv/tags", "PASS " + password, "NICK " + nick, "JOIN #" + channel} {
+		if err := write(line); err != nil {
 			return false
 		}
 	}
@@ -155,7 +244,7 @@ func session(ctx context.Context, open Dialer, channel string, onMessage func(Me
 		line = strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(line, "PING"):
-			if _, err := fmt.Fprintf(conn, "PONG%s\r\n", strings.TrimPrefix(line, "PING")); err != nil {
+			if err := write("PONG" + strings.TrimPrefix(line, "PING")); err != nil {
 				return joined
 			}
 		case strings.Contains(line, " RECONNECT"), strings.HasPrefix(line, "RECONNECT"):
@@ -165,6 +254,32 @@ func session(ctx context.Context, open Dialer, channel string, onMessage func(Me
 				joined = true
 				if onState != nil {
 					onState(true)
+				}
+				if onSend != nil && token != "" {
+					onSend(func(text string) error {
+						if strings.ContainsAny(text, "\r\n") || strings.TrimSpace(text) == "" {
+							return errors.New("Twitch chat message must be one non-empty line")
+						}
+						if utf8.RuneCountInString(text) > 500 {
+							return errors.New("Twitch chat message is longer than 500 characters")
+						}
+						chatMu.Lock()
+						defer chatMu.Unlock()
+						if wait := time.Until(nextChatMessage); wait > 0 {
+							timer := time.NewTimer(wait)
+							defer timer.Stop()
+							select {
+							case <-ctx.Done():
+								return ctx.Err()
+							case <-timer.C:
+							}
+						}
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+						nextChatMessage = time.Now().Add(1600 * time.Millisecond)
+						return write("PRIVMSG #" + channel + " :" + text)
+					})
 				}
 			}
 		default:

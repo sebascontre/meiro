@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/elianiva/meiro/internal/twitch"
@@ -26,6 +27,12 @@ func TestRequestQuery(t *testing.T) {
 func TestSongRequestsQueueWithRequester(t *testing.T) {
 	a := newTestApp(t)
 	a.settings.AutoPlay = false
+	a.requests.token = "validated"
+	var replies []string
+	a.requests.sendChat = func(message string) error {
+		replies = append(replies, message)
+		return nil
+	}
 	a.requests.find = func(_ context.Context, query string) (youtube.MusicItem, error) {
 		return youtube.MusicItem{VideoID: "id-" + query, Title: query, Kind: youtube.KindTrack}, nil
 	}
@@ -52,19 +59,45 @@ func TestSongRequestsQueueWithRequester(t *testing.T) {
 	if s := rowSubtitle(a.queue.at(1)); s != "Requested by ana" {
 		t.Errorf("subtitle = %q", s)
 	}
+	if len(replies) != 2 || !strings.Contains(replies[0], "posición 2") || !strings.Contains(replies[1], "posición 3") {
+		t.Errorf("replies = %v, want positions 2 and 3", replies)
+	}
 
 	a.handleChat(twitch.Message{User: "ana", Text: "!sr three"})
 	a.handleChat(twitch.Message{User: "ana", Text: "!sr four"}) // over the limit
 	if n := a.pendingRequests("ana"); n != maxPendingRequests {
 		t.Errorf("pending = %d, want %d", n, maxPendingRequests)
 	}
+	if len(replies) != 3 || !strings.Contains(replies[2], "posición 4") {
+		t.Errorf("replies = %v, want third song at position 4", replies)
+	}
+}
+
+func TestRequestedPositionCountsFromCurrent(t *testing.T) {
+	q := newQueue()
+	q.items = []youtube.MusicItem{
+		{VideoID: "previous"},
+		{VideoID: "current"},
+		{VideoID: "request", RequestedBy: "ana"},
+	}
+	q.index = 1
+	if got := requestedPosition(&q, "request", "ana"); got != 2 {
+		t.Errorf("position = %d, want 2", got)
+	}
+	if got := requestedPosition(&q, "previous", "ana"); got != 0 {
+		t.Errorf("played request position = %d, want 0", got)
+	}
 }
 
 func TestSyncSongRequestsFollowsSettings(t *testing.T) {
 	a := newTestApp(t)
 	var channels []string
+	var authenticated []string
 	a.requests.connect = func(ctx context.Context, channel string, _ func(twitch.Message), _ func(bool)) {
 		channels = append(channels, channel)
+	}
+	a.requests.connectAuthenticated = func(_ context.Context, channel, login, token string, _ func(twitch.Message), _ func(bool), _ func(func(string) error)) {
+		authenticated = append(authenticated, channel+"|"+login+"|"+token)
 	}
 	a.settings.TwitchChannel = "Some_Channel"
 	a.syncSongRequests()
@@ -76,6 +109,11 @@ func TestSyncSongRequestsFollowsSettings(t *testing.T) {
 	a.syncSongRequests()
 	if len(channels) != 1 || channels[0] != "some_channel" {
 		t.Fatalf("channels = %v", channels)
+	}
+	a.requests.token, a.requests.login = "access-token", "account"
+	a.syncSongRequests()
+	if len(authenticated) != 1 || authenticated[0] != "some_channel|account|access-token" {
+		t.Fatalf("authenticated connections = %v", authenticated)
 	}
 	a.settings.SongRequests = false
 	a.syncSongRequests()

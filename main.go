@@ -196,6 +196,7 @@ func (a *app) setup() {
 		a.restorePlayback(filepath.Join(directory, "playback.json"))
 		a.openScrobbler(secretfile.File{Path: filepath.Join(directory, "lastfm-session.txt"), Keychain: mygo.Secrets, Name: credentialsKey}, filepath.Join(directory, "lastfm-pending.json"))
 		a.openCredits(filepath.Join(directory, "credits.json"))
+		a.loadTwitchToken(secretfile.File{Path: filepath.Join(directory, "twitch-token.txt"), Keychain: mygo.Secrets, Name: credentialsKey})
 	} else {
 		a.account.signIn.err = err.Error()
 	}
@@ -262,6 +263,8 @@ func (a *app) openAudioCache() {
 // shutdown flushes the settings, then closes what belongs to the app.
 func (a *app) shutdown() {
 	a.requests.stop()
+	a.requests.tokenTask.stop()
+	a.requests.tokenLoad.stop()
 	a.notificationArtwork.stop()
 	a.finishEpisodeProgress(true)
 	a.savePlayback(0)

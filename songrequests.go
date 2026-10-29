@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/elianiva/meiro/internal/secretfile"
 	"github.com/elianiva/meiro/internal/twitch"
 	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/youtube"
@@ -35,9 +37,22 @@ var requestCommands = []string{"!sr", "!songrequest"}
 type songRequests struct {
 	// channel is the chat being read, and cancel ends the reading; both are
 	// zero while none is.
-	channel   string
-	cancel    context.CancelFunc
-	connected bool
+	channel         string
+	connectionLogin string
+	cancel          context.CancelFunc
+	connected       bool
+	// token and login are the validated Twitch credentials in memory.
+	token, login string
+	// sendChat is available only while the authenticated connection is joined.
+	sendChat func(string) error
+	// pendingReplies waits for an authenticated reconnect, in order.
+	pendingReplies []string
+	// tokenText exists only in the settings field; tokenError says why the
+	// last attempt did not connect.
+	tokenText, tokenError string
+	tokenStore            secretfile.File
+	tokenTask             task
+	tokenLoad             task
 	// channelText is what the channel field holds, and channelError what was
 	// wrong with the last one typed.
 	channelText, channelError string
@@ -47,7 +62,8 @@ type songRequests struct {
 	// find looks a song up; tests replace it.
 	find func(ctx context.Context, query string) (youtube.MusicItem, error)
 	// connect reads a chat until ctx ends; tests replace it.
-	connect func(ctx context.Context, channel string, onMessage func(twitch.Message), onState func(bool))
+	connect              func(ctx context.Context, channel string, onMessage func(twitch.Message), onState func(bool))
+	connectAuthenticated func(ctx context.Context, channel, login, token string, onMessage func(twitch.Message), onState func(bool), onSend func(func(string) error))
 }
 
 // stop ends the reading of the chat.
@@ -55,7 +71,8 @@ func (r *songRequests) stop() {
 	if r.cancel != nil {
 		r.cancel()
 	}
-	r.cancel, r.channel, r.connected = nil, "", false
+	r.cancel, r.channel, r.connectionLogin, r.connected, r.sendChat, r.pendingReplies = nil, "", "", false, nil, nil
+	clear(r.lookups)
 }
 
 // syncSongRequests reads the chat the settings name, and stops reading one
@@ -66,7 +83,11 @@ func (a *app) syncSongRequests() {
 	if a.settings.SongRequests {
 		channel = twitch.Channel(a.settings.TwitchChannel)
 	}
-	if channel == r.channel {
+	login := ""
+	if r.token != "" {
+		login = r.login
+	}
+	if channel == r.channel && login == r.connectionLogin {
 		return
 	}
 	r.stop()
@@ -74,8 +95,45 @@ func (a *app) syncSongRequests() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r.channel, r.cancel = channel, cancel
+	r.channel, r.connectionLogin, r.cancel = channel, login, cancel
+	token := r.token
+	username := r.login
 	connect := r.connect
+	connectAuthenticated := r.connectAuthenticated
+	if token != "" {
+		if connectAuthenticated == nil {
+			connectAuthenticated = twitch.RunAuthenticated
+		}
+		a.run(func() {
+			connectAuthenticated(ctx, channel, username, token, func(m twitch.Message) {
+				a.update(func() {
+					if ctx.Err() == nil {
+						a.handleChatFrom(ctx, m)
+					}
+				})
+			}, func(connected bool) {
+				a.update(func() {
+					if ctx.Err() == nil {
+						r.connected = connected
+					}
+				})
+			}, func(send func(string) error) {
+				a.update(func() {
+					if ctx.Err() == nil {
+						r.sendChat = send
+						if send != nil {
+							pending := r.pendingReplies
+							r.pendingReplies = nil
+							for _, message := range pending {
+								a.replyInChat(message)
+							}
+						}
+					}
+				})
+			})
+		})
+		return
+	}
 	if connect == nil {
 		connect = twitch.Run
 	}
@@ -83,7 +141,7 @@ func (a *app) syncSongRequests() {
 		connect(ctx, channel, func(m twitch.Message) {
 			a.update(func() {
 				if ctx.Err() == nil {
-					a.handleChat(m)
+					a.handleChatFrom(ctx, m)
 				}
 			})
 		}, func(connected bool) {
@@ -115,6 +173,10 @@ func requestQuery(text string) string {
 // handleChat takes a message of the chat, and adds the song it asks for to
 // the queue.
 func (a *app) handleChat(m twitch.Message) {
+	a.handleChatFrom(context.Background(), m)
+}
+
+func (a *app) handleChatFrom(source context.Context, m twitch.Message) {
 	query := requestQuery(m.Text)
 	if query == "" {
 		return
@@ -141,6 +203,9 @@ func (a *app) handleChat(m twitch.Message) {
 		item, err := find(ctx, query)
 		return songResult{item, err}
 	}, func(res songResult) {
+		if source.Err() != nil {
+			return
+		}
 		if r.lookups[m.User]--; r.lookups[m.User] <= 0 {
 			delete(r.lookups, m.User)
 		}
@@ -181,6 +246,115 @@ func (a *app) addRequest(user, query string, res songResult) {
 	item.RequestedBy = user
 	a.enqueue(item, false)
 	a.notice = user + " requested " + item.Title
+	if position := requestedPosition(&a.queue, item.VideoID, user); position > 0 && a.requests.token != "" {
+		a.replyInChat(fmt.Sprintf("@%s: %q fue agregada en la posición %d de la cola (la canción actual cuenta como posición 1).",
+			user, item.Title, position))
+	}
+}
+
+// requestedPosition is the one-based place after the currently playing track,
+// which itself is position 1.
+func requestedPosition(q *queue, videoID, user string) int {
+	for index := max(q.index, 0); index < q.len(); index++ {
+		if item := q.at(index); item.VideoID == videoID && item.RequestedBy == user {
+			return index - q.index + 1
+		}
+	}
+	return 0
+}
+
+// replyInChat sends a confirmation off the UI thread when the authenticated
+// chat connection is ready.
+func (a *app) replyInChat(message string) {
+	r := &a.requests
+	send := r.sendChat
+	if send == nil {
+		if r.token != "" {
+			if len(r.pendingReplies) < 25 {
+				r.pendingReplies = append(r.pendingReplies, message)
+			} else {
+				log.Printf("dropping Twitch chat reply: outgoing reply queue is full")
+			}
+		}
+		return
+	}
+	a.run(func() {
+		if err := send(message); err != nil {
+			log.Printf("sending Twitch song request confirmation: %v", err)
+			a.update(func() { a.notice = "Song added, but Twitch could not send the chat reply." })
+		}
+	})
+}
+
+// loadTwitchToken reads the saved token and checks it before enabling replies.
+func (a *app) loadTwitchToken(store secretfile.File) {
+	r := &a.requests
+	r.tokenStore = store
+	startTask(a, &r.tokenLoad, 30*time.Second, func(ctx context.Context) (string, error) {
+		return store.Load(ctx)
+	}, func(token string, err error) {
+		if errors.Is(err, secretfile.ErrNotSaved) {
+			return
+		}
+		if err != nil {
+			log.Printf("reading Twitch credentials: %v", err)
+			r.tokenError = "Could not read the saved Twitch token."
+			return
+		}
+		a.authorizeTwitchToken(token, false)
+	})
+}
+
+// authorizeTwitchToken validates a token before saving it or using it to join
+// chat. Saving happens off the UI thread, in the system credential store.
+func (a *app) authorizeTwitchToken(token string, save bool) {
+	token = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(token), "oauth:"))
+	if token == "" {
+		a.requests.tokenError = "Paste a Twitch access token."
+		return
+	}
+	r := &a.requests
+	startTask(a, &r.tokenTask, 30*time.Second, func(ctx context.Context) (string, error) {
+		login, err := twitch.Validate(ctx, token)
+		if err != nil {
+			return "", err
+		}
+		if save {
+			if r.tokenStore.Path == "" {
+				return "", errors.New("Twitch token storage is not available")
+			}
+			if err := r.tokenStore.Save(ctx, token); err != nil {
+				return "", fmt.Errorf("saving Twitch token: %w", err)
+			}
+		}
+		return login, nil
+	}, func(login string, err error) {
+		if err != nil {
+			log.Printf("connecting Twitch chat: %v", err)
+			r.tokenError = err.Error()
+			return
+		}
+		r.token, r.login, r.tokenText, r.tokenError = token, login, "", ""
+		a.syncSongRequests()
+	})
+}
+
+// disconnectTwitch clears the saved sending credential. Song Request itself
+// remains on, and can continue reading chat anonymously.
+func (a *app) disconnectTwitch() {
+	r := &a.requests
+	r.tokenTask.stop()
+	r.token, r.login, r.sendChat = "", "", nil
+	a.syncSongRequests()
+	store := r.tokenStore
+	spawn(a, func() error { return store.Delete(context.Background()) }, func(err error) {
+		if err != nil {
+			log.Printf("removing Twitch credentials: %v", err)
+			r.tokenError = "Could not remove the saved Twitch token."
+			return
+		}
+		r.tokenError = ""
+	})
 }
 
 var videoIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
@@ -317,7 +491,7 @@ func (a *app) songRequestsCard(c *ui.Context) {
 	a.settingsCard(c, "Song requests", m3.IconMusicNote, func() {
 		ui.Column(c).Gap(12).Children(func() {
 			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
-				settingLabel(c, "Twitch song requests", "Chatters of the channel add songs to the end of the queue with !sr followed by a song and artist, or a YouTube link, and the queue shows who asked. Meiro only reads the chat; it does not sign in or reply.").Grow(1)
+				settingLabel(c, "Twitch song requests", "Chatters add songs with !sr followed by a song and artist, or a YouTube link. Meiro shows who requested each song. Add a Twitch token below to confirm successful requests in chat with their queue position.").Grow(1)
 				on := a.settings.SongRequests
 				if m3.Switch(c, &on, "Twitch song requests").Changed() {
 					a.settings.SongRequests = on
@@ -335,6 +509,35 @@ func (a *app) songRequestsCard(c *ui.Context) {
 			if input.Submitted() {
 				a.setTwitchChannel(a.requests.channelText)
 			}
+			ui.Column(c).Gap(8).Children(func() {
+				settingLabel(c, "Chat replies", "Paste a Twitch access token with chat:read and chat:edit permissions. Meiro validates it and stores it separately from Settings, encrypted when the system has a credential store.")
+				if a.requests.login != "" {
+					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+						m3.Text(c, m3.BodyMedium, "Sending as "+a.requests.login).TextColor(sc.OnSurfaceVariant).Grow(1)
+						if m3.Button(c, m3.ButtonSpec{Label: "Disconnect", Kind: m3.Tonal, Size: m3.Medium56, Key: "twitch-disconnect"}).Clicked() {
+							a.disconnectTwitch()
+						}
+					})
+				} else {
+					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+						token := ui.TextInputBase(c.Key("twitch-token"), &a.requests.tokenText).
+							Width(360).Height(48).Shrink(1).Padding(12).Radius(m3.Medium).Background(sc.SurfaceContainerHigh).
+							TextColor(sc.OnSurface).FontSize(16).Label("Twitch access token").Placeholder("access token").Password()
+						if token.Submitted() {
+							a.authorizeTwitchToken(a.requests.tokenText, true)
+						}
+						if m3.Button(c, m3.ButtonSpec{Label: "Connect", Kind: m3.Filled, Size: m3.Medium56, Disabled: a.requests.tokenTask.busy(), Key: "twitch-connect"}).Clicked() {
+							a.authorizeTwitchToken(a.requests.tokenText, true)
+						}
+					})
+				}
+				if a.requests.tokenTask.busy() || a.requests.tokenLoad.busy() {
+					m3.Text(c, m3.BodyMedium, "Checking Twitch access…").TextColor(sc.OnSurfaceVariant)
+				}
+				if a.requests.tokenError != "" {
+					m3.Text(c, m3.BodyMedium, a.requests.tokenError).TextColor(sc.Error).MaxLines(3)
+				}
+			})
 			switch {
 			case !a.settings.SongRequests:
 			case twitch.Channel(a.settings.TwitchChannel) == "":
