@@ -214,3 +214,21 @@ func TestDiscardRadioClipRemovesTheFile(t *testing.T) {
 		t.Fatalf("clip kept: %v %q %q", err, a.requests.clipLine, a.requests.clipPath)
 	}
 }
+
+func TestRadioAlwaysForcesEveryTransition(t *testing.T) {
+	a := newTestApp(t)
+	a.settings.SongRequests = true
+	a.current = youtube.MusicItem{VideoID: "a", Title: "A", Kind: youtube.KindTrack}
+	next := youtube.MusicItem{VideoID: "b", Title: "B", Kind: youtube.KindTrack}
+	if a.radioPlanned(1, next) {
+		t.Fatal("planned for songs nobody requested")
+	}
+	a.settings.RadioAlways = true
+	if !a.radioPlanned(1, next) {
+		t.Fatal("not forced")
+	}
+	a.settings.SongRequests = false
+	if a.radioPlanned(1, next) {
+		t.Fatal("forced while Song requests is off")
+	}
+}

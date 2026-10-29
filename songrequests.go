@@ -296,7 +296,14 @@ func (a *app) prefetchRadio(next youtube.MusicItem) {
 }
 
 func (a *app) radioPlanned(nextIndex int, next youtube.MusicItem) bool {
-	if !a.settings.SongRequests || nextIndex < 0 || !requestedSong(a.current) || !requestedSong(next) {
+	if !a.settings.SongRequests || nextIndex < 0 {
+		a.requests.radioPair, a.requests.radioChosen = "", false
+		return false
+	}
+	if a.settings.RadioAlways {
+		return true
+	}
+	if !requestedSong(a.current) || !requestedSong(next) {
 		a.requests.radioPair, a.requests.radioChosen = "", false
 		return false
 	}
@@ -655,6 +662,15 @@ func (a *app) songRequestsCard(c *ui.Context) {
 					a.settings.SongRequests = on
 					a.syncSongRequests()
 					a.saveSettings()
+				}
+			})
+			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+				settingLabel(c, "Always narrate (testing)", "Radio Chatcito speaks between every pair of songs, requested or not, instead of one in four requested transitions.").Grow(1)
+				always := a.settings.RadioAlways
+				if m3.Switch(c, &always, "Always narrate").Changed() {
+					a.settings.RadioAlways = always
+					a.saveSettings()
+					a.syncPreload()
 				}
 			})
 			if !a.requests.channelShown {

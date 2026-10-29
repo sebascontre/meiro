@@ -85,6 +85,9 @@ type Settings struct {
 	// SongRequests lets the chat of TwitchChannel add songs to the queue
 	// with !sr.
 	SongRequests bool `json:"songRequests,omitempty"`
+	// RadioAlways makes Radio Chatcito speak between every pair of songs, for
+	// testing.
+	RadioAlways bool `json:"radioAlways,omitempty"`
 	// TwitchChannel is the login of the channel whose chat is read.
 	TwitchChannel string `json:"twitchChannel,omitempty"`
 	// Shortcuts holds the keyboard shortcuts the user changed, by action ID
