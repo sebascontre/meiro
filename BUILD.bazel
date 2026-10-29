@@ -159,6 +159,7 @@ go_library(
         "playlist.go",
         "playlist_sort.go",
         "queue.go",
+        "radio_voice.go",
         "routes.go",
         "rows.go",
         "scrobble.go",

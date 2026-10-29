@@ -263,6 +263,7 @@ func (a *app) openAudioCache() {
 // shutdown flushes the settings, then closes what belongs to the app.
 func (a *app) shutdown() {
 	a.requests.stop()
+	a.requests.radio.stop()
 	a.requests.tokenTask.stop()
 	a.requests.tokenLoad.stop()
 	a.notificationArtwork.stop()

@@ -50,7 +50,7 @@ func (a *app) transport(c *ui.Context, size float32, gap float32) {
 		spec.Icon, spec.Label, spec.Key = m3.IconNext, "Next", "next"
 		a.hinted(c, func() {
 			if m3.IconButton(c, spec).Clicked() {
-				a.advance()
+				a.advanceManually()
 			}
 		}, keymap.Next)
 		spec = small

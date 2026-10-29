@@ -123,7 +123,7 @@ func (a *app) perform(action keymap.Action) {
 	case keymap.Previous:
 		a.previous()
 	case keymap.Next:
-		a.advance()
+		a.advanceManually()
 	case keymap.VolumeUp:
 		a.setVolume(a.volume + volumeStep)
 		a.saveSettings()

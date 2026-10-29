@@ -108,6 +108,7 @@ func (a *app) playFrom(item youtube.MusicItem, tracks []youtube.MusicItem, index
 	if item.VideoID == "" {
 		return
 	}
+	a.requests.radio.stop()
 	a.clearQueueSelection()
 	a.queue.replace(item, tracks, index, source)
 	clear(a.scrobble.queued) // the queue they were added to is gone
@@ -132,6 +133,7 @@ const maxSkips = 3
 
 // start makes item the current track and finds its audio.
 func (a *app) start(item youtube.MusicItem) {
+	a.requests.radio.stop()
 	a.skipped = 0
 	a.startTrack(item, false)
 }
@@ -472,7 +474,19 @@ func (a *app) trackEnded() {
 // advance plays the next track of the queue, waiting for recommendations at
 // its end when auto-play is on.
 func (a *app) advance() {
+	a.advanceWithRadio(true)
+}
+
+func (a *app) advanceWithRadio(allowRadio bool) {
+	if allowRadio && a.requests.radio.busy() {
+		return
+	}
 	if next, ok := a.queue.next(a.settings.AutoPlay, a.repeat); ok {
+		current := a.current
+		nextItem := a.queue.at(next)
+		if allowRadio && a.radioTransition(current, nextItem, next) {
+			return
+		}
 		a.startNext(a.queue.moveTo(next))
 		return
 	}
@@ -488,6 +502,12 @@ func (a *app) advance() {
 		return
 	}
 	a.stopAtQueueEnd()
+}
+
+// advanceManually cancels an announcer break before carrying out Next.
+func (a *app) advanceManually() {
+	a.requests.radio.stop()
+	a.advanceWithRadio(false)
 }
 
 // stopAtQueueEnd stops playback, and drops a track still being found.

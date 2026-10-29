@@ -163,7 +163,15 @@ func (a *app) following() (int, youtube.MusicItem, bool) {
 // follows, and starts it once the current track is near its end. It runs on
 // every poll and after anything that can change what follows.
 func (a *app) syncPreload() {
-	_, next, ok := a.following()
+	nextIndex, next, ok := a.following()
+	if ok && a.radioPlanned(nextIndex, next) {
+		a.preload.stop()
+		if a.player.Preloaded() != "" {
+			a.player.CancelPreload()
+			a.preloaded = preloadedAudio{}
+		}
+		return
+	}
 	if held := a.player.Preloaded(); held != "" && (!ok || held != next.VideoID) {
 		a.player.CancelPreload()
 		a.preloaded = preloadedAudio{}

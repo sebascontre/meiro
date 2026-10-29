@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -47,12 +48,17 @@ type songRequests struct {
 	sendChat func(string) error
 	// pendingReplies waits for an authenticated reconnect, in order.
 	pendingReplies []string
+	radioPair      string
+	radioChosen    bool
 	// tokenText exists only in the settings field; tokenError says why the
 	// last attempt did not connect.
 	tokenText, tokenError string
 	tokenStore            secretfile.File
 	tokenTask             task
 	tokenLoad             task
+	radio                 task
+	radioRoll             func() bool
+	speakRadio            func(context.Context, string) error
 	// channelText is what the channel field holds, and channelError what was
 	// wrong with the last one typed.
 	channelText, channelError string
@@ -82,7 +88,11 @@ func (a *app) syncSongRequests() {
 	channel := ""
 	if a.settings.SongRequests {
 		channel = twitch.Channel(a.settings.TwitchChannel)
+	} else {
+		r.radio.stop()
+		r.radioPair, r.radioChosen = "", false
 	}
+	a.syncPreload()
 	login := ""
 	if r.token != "" {
 		login = r.login
@@ -152,6 +162,98 @@ func (a *app) syncSongRequests() {
 			})
 		})
 	})
+}
+
+// radioTransitionChance is one announcer break in this many eligible
+// transitions on average.
+const radioTransitionChance = 4
+
+// radioAnnouncement is a short Spanish link between two requested songs.
+func radioAnnouncement(previous, next youtube.MusicItem) string {
+	previousTitle, nextTitle := radioWords(previous.Title), radioWords(next.Title)
+	if previousTitle == "" || nextTitle == "" {
+		return ""
+	}
+	line := "Acabamos de escuchar «" + previousTitle + "»"
+	if artist := radioWords(previous.Artist); artist != "" {
+		line += ", de " + artist
+	}
+	if user := radioWords(previous.RequestedBy); user != "" {
+		line += ", pedida por " + user
+	}
+	line += ". Seguimos aquí, en Radio Chatcito. Ahora escuchamos «" + nextTitle + "»"
+	if artist := radioWords(next.Artist); artist != "" {
+		line += ", de " + artist
+	}
+	if user := radioWords(next.RequestedBy); user != "" {
+		line += ", pedida por " + user
+	}
+	return line + ". ¡Gracias por acompañarnos!"
+}
+
+func radioWords(text string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(text) {
+		if r < ' ' || r == 0x7f {
+			continue
+		}
+		if b.Len() >= 160 {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func requestedSong(item youtube.MusicItem) bool {
+	return item.RequestedBy != "" && item.IsTrack() && !item.IsEpisode()
+}
+
+// radioTransition schedules an occasional spoken link after the current song
+// ends and before the next request begins.
+func (a *app) radioTransition(previous, next youtube.MusicItem, nextIndex int) bool {
+	if !a.player.Ended() || !a.radioPlanned(nextIndex, next) {
+		return false
+	}
+	line := radioAnnouncement(previous, next)
+	if line == "" {
+		return false
+	}
+	currentID, currentIndex, nextID := previous.VideoID, a.queue.index, next.VideoID
+	speak := a.requests.speakRadio
+	if speak == nil {
+		speak = speakRadioLine
+	}
+	startTask(a, &a.requests.radio, 45*time.Second, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, speak(ctx, line)
+	}, func(_ struct{}, err error) {
+		if err != nil {
+			log.Printf("speaking Twitch song request transition: %v", err)
+		}
+		if !a.settings.SongRequests || a.current.VideoID != currentID || a.queue.index != currentIndex ||
+			nextIndex >= a.queue.len() || a.queue.at(nextIndex).VideoID != nextID {
+			return
+		}
+		a.startNext(a.queue.moveTo(nextIndex))
+	})
+	return true
+}
+
+func (a *app) radioPlanned(nextIndex int, next youtube.MusicItem) bool {
+	if !a.settings.SongRequests || nextIndex < 0 || !requestedSong(a.current) || !requestedSong(next) {
+		a.requests.radioPair, a.requests.radioChosen = "", false
+		return false
+	}
+	pair := fmt.Sprintf("%s:%d>%s:%d", a.current.VideoID, a.queue.index, next.VideoID, nextIndex)
+	if pair != a.requests.radioPair {
+		a.requests.radioPair = pair
+		if a.requests.radioRoll != nil {
+			a.requests.radioChosen = a.requests.radioRoll()
+		} else {
+			a.requests.radioChosen = rand.IntN(radioTransitionChance) == 0
+		}
+	}
+	return a.requests.radioChosen
 }
 
 // requestQuery is what a chat message asks for, or "" when it asks for
@@ -538,6 +640,9 @@ func (a *app) songRequestsCard(c *ui.Context) {
 					m3.Text(c, m3.BodyMedium, a.requests.tokenError).TextColor(sc.Error).MaxLines(3)
 				}
 			})
+			if a.settings.SongRequests {
+				m3.Text(c, m3.BodyMedium, "Radio Chatcito will occasionally introduce one requested song before the next, speaking only between songs. macOS and Windows need an installed Spanish voice; Linux needs espeak-ng or Speech Dispatcher.").TextColor(sc.OnSurfaceVariant).MaxLines(3)
+			}
 			switch {
 			case !a.settings.SongRequests:
 			case twitch.Channel(a.settings.TwitchChannel) == "":

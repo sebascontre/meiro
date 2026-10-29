@@ -89,6 +89,50 @@ func TestRequestedPositionCountsFromCurrent(t *testing.T) {
 	}
 }
 
+func TestRadioAnnouncementUsesRequestAndTrackDetails(t *testing.T) {
+	previous := youtube.MusicItem{VideoID: "one", Title: "One More Time", Artist: "Daft Punk", RequestedBy: "ana", Kind: youtube.KindTrack}
+	next := youtube.MusicItem{VideoID: "two", Title: "Get Lucky", Artist: "Daft Punk", RequestedBy: "bob", Kind: youtube.KindTrack}
+	line := radioAnnouncement(previous, next)
+	for _, part := range []string{"One More Time", "Daft Punk", "ana", "Radio Chatcito", "Get Lucky", "bob"} {
+		if !strings.Contains(line, part) {
+			t.Errorf("announcement %q does not contain %q", line, part)
+		}
+	}
+	if !requestedSong(previous) || !requestedSong(next) {
+		t.Fatal("song requests were not recognized")
+	}
+	if requestedSong(youtube.MusicItem{VideoID: "other", Kind: youtube.KindTrack}) {
+		t.Fatal("a song not requested in chat was recognized as a request")
+	}
+	if line := radioAnnouncement(previous, youtube.MusicItem{RequestedBy: "bob"}); line != "" {
+		t.Errorf("announcement without a title = %q", line)
+	}
+}
+
+func TestRadioPlanningIsStableAndRequestOnly(t *testing.T) {
+	a := newTestApp(t)
+	a.settings.SongRequests = true
+	a.current = youtube.MusicItem{VideoID: "previous", RequestedBy: "ana", Kind: youtube.KindTrack}
+	a.queue.items = []youtube.MusicItem{
+		a.current,
+		{VideoID: "next", RequestedBy: "bob", Kind: youtube.KindTrack},
+	}
+	a.queue.index = 0
+	rolls := 0
+	a.requests.radioRoll = func() bool {
+		rolls++
+		return true
+	}
+	next := a.queue.at(1)
+	if !a.radioPlanned(1, next) || !a.radioPlanned(1, next) || rolls != 1 {
+		t.Fatalf("radio plan changed for the same transition: chosen=%v rolls=%d", a.requests.radioChosen, rolls)
+	}
+	a.settings.SongRequests = false
+	if a.radioPlanned(1, next) {
+		t.Fatal("announcer planned while Song requests is off")
+	}
+}
+
 func TestSyncSongRequestsFollowsSettings(t *testing.T) {
 	a := newTestApp(t)
 	var channels []string
