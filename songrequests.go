@@ -230,7 +230,17 @@ func radioArtist(artist string) string {
 	if strings.EqualFold(strings.TrimSpace(artist), "itsyamivt") {
 		return "It´s Yami VT"
 	}
-	return artist
+	return trimChannelSuffix(artist)
+}
+
+// trimChannelSuffix drops the "Ch." suffix YouTube channels use, such as
+// "Edomancer Ch.", which reads badly aloud.
+func trimChannelSuffix(name string) string {
+	fields := strings.Fields(name)
+	if n := len(fields); n > 1 && strings.EqualFold(fields[n-1], "ch.") {
+		return strings.Join(fields[:n-1], " ")
+	}
+	return name
 }
 
 // radioAnnouncement is a short Spanish link between two songs. It varies from

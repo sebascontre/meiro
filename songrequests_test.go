@@ -518,3 +518,16 @@ func TestGoogleVoicesListsSpanishChirpVoices(t *testing.T) {
 		t.Errorf("language = %q", got)
 	}
 }
+
+func TestRadioArtistDropsChannelSuffix(t *testing.T) {
+	for in, want := range map[string]string{
+		"Edomancer Ch.":         "Edomancer",
+		"Chrome Cottontail Ch.": "Chrome Cottontail",
+		"Ch.":                   "Ch.",
+		"Church":                "Church",
+	} {
+		if got := radioArtist(radioWords(in)); got != want {
+			t.Errorf("radioArtist(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
