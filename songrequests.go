@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -226,13 +227,46 @@ func radioDescribe(item youtube.MusicItem, title string, phrase int) string {
 // radioAnnouncement is a short Spanish link between two songs. It varies from
 // one transition to another but is stable for the same pair.
 func radioAnnouncement(previous, next youtube.MusicItem) string {
-	previousTitle, nextTitle := radioWords(previous.Title), radioWords(next.Title)
+	previousTitle, nextTitle := radioTitle(previous.Title), radioTitle(next.Title)
 	if previousTitle == "" || nextTitle == "" {
 		return ""
 	}
 	script := radioScripts[radioPick(previous, next, "script", len(radioScripts))]
 	script = strings.Replace(script, "%P", radioDescribe(previous, previousTitle, radioPick(previous, next, "previous", len(radioRequestPhrases))), 1)
 	return strings.Replace(script, "%N", radioDescribe(next, nextTitle, radioPick(previous, next, "next", len(radioRequestPhrases))), 1)
+}
+
+// radioTitle prefers the Japanese title when metadata appends a Latin-script
+// title or artist after a dash, for example "アイドル - YOASOBI".
+func radioTitle(title string) string {
+	for _, dash := range []string{" - ", " – ", " — ", "−"} {
+		if before, after, ok := strings.Cut(title, dash); ok && hasJapanese(before) && hasNonJapaneseText(after) {
+			return radioWords(before)
+		}
+	}
+	return radioWords(title)
+}
+
+func isJapanese(r rune) bool {
+	return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r)
+}
+
+func hasJapanese(text string) bool {
+	for _, r := range text {
+		if isJapanese(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNonJapaneseText(text string) bool {
+	for _, r := range text {
+		if (unicode.IsLetter(r) || unicode.IsDigit(r)) && !isJapanese(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func radioWords(text string) string {
@@ -399,6 +433,10 @@ func (a *app) handleChat(m twitch.Message) {
 }
 
 func (a *app) handleChatFrom(source context.Context, m twitch.Message) {
+	if isRequestUndoCommand(m.Text) {
+		a.undoLastRequest(m.User)
+		return
+	}
 	query := requestQuery(m.Text)
 	if query == "" {
 		return
@@ -435,6 +473,26 @@ func (a *app) handleChatFrom(source context.Context, m twitch.Message) {
 		}
 		a.addRequest(m.User, query, res)
 	})
+}
+
+func isRequestUndoCommand(text string) bool {
+	command, _, _ := strings.Cut(strings.TrimSpace(text), " ")
+	return strings.EqualFold(command, "!sr_error")
+}
+
+// undoLastRequest removes the last unplayed song requested by this chatter.
+// The currently playing song cannot be removed from the queue.
+func (a *app) undoLastRequest(user string) {
+	for i := a.queue.len() - 1; i > a.queue.index; i-- {
+		item := a.queue.at(i)
+		if !strings.EqualFold(item.RequestedBy, user) {
+			continue
+		}
+		a.removeFromQueue(i)
+		a.replyInChat(fmt.Sprintf("@%s: se quitó %q de la cola.", user, item.Title))
+		return
+	}
+	a.replyInChat(fmt.Sprintf("@%s: no tienes canciones pendientes para quitar.", user))
 }
 
 type songResult struct {

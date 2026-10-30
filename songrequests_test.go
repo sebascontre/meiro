@@ -111,6 +111,52 @@ func TestSongRequestLimitIsConfigurableAndRepliesAtTheCap(t *testing.T) {
 	}
 }
 
+func TestSRErrorRemovesTheMostRecentUnplayedRequest(t *testing.T) {
+	a := newTestApp(t)
+	a.settings.SongRequests = true
+	a.requests.token = "validated"
+	var replies []string
+	a.requests.sendChat = func(message string) error {
+		replies = append(replies, message)
+		return nil
+	}
+	a.current = youtube.MusicItem{VideoID: "current", Title: "Now"}
+	a.queue.items = []youtube.MusicItem{
+		a.current,
+		{VideoID: "ana-first", Title: "First", RequestedBy: "ana"},
+		{VideoID: "bob", Title: "Bob's song", RequestedBy: "bob"},
+		{VideoID: "ana-last", Title: "Last", RequestedBy: "ana"},
+	}
+	a.queue.index = 0
+
+	a.handleChat(twitch.Message{User: "ANA", Text: "!sr_error"})
+
+	if got, want := ids(a.queue.items), []string{"current", "ana-first", "bob"}; !slices.Equal(got, want) {
+		t.Fatalf("queue after undo = %v, want %v", got, want)
+	}
+	if len(replies) != 1 || !strings.Contains(replies[0], "Last") {
+		t.Fatalf("replies = %v, want removal confirmation for Last", replies)
+	}
+}
+
+func TestSRErrorReportsWhenThereIsNothingToRemove(t *testing.T) {
+	a := newTestApp(t)
+	a.requests.token = "validated"
+	var replies []string
+	a.requests.sendChat = func(message string) error {
+		replies = append(replies, message)
+		return nil
+	}
+	a.current = youtube.MusicItem{VideoID: "current", RequestedBy: "ana"}
+	a.queue.items, a.queue.index = []youtube.MusicItem{a.current}, 0
+
+	a.handleChat(twitch.Message{User: "ana", Text: "!Sr_Error"})
+
+	if a.queue.len() != 1 || len(replies) != 1 || !strings.Contains(replies[0], "no tienes canciones pendientes") {
+		t.Fatalf("queue=%v replies=%v", ids(a.queue.items), replies)
+	}
+}
+
 func TestSongRequestPromotesAnAutoplayTrackIntoTheRequestedQueue(t *testing.T) {
 	a := newTestApp(t)
 	a.settings.AutoPlay = true
@@ -379,12 +425,27 @@ func TestRadioWordsSkipsParentheses(t *testing.T) {
 		if got := radioWords(in); got != want {
 			t.Errorf("radioWords(%q) = %q, want %q", in, got, want)
 		}
+
 	}
 	line := radioAnnouncement(
 		youtube.MusicItem{VideoID: "a", Title: "Uno (Live)", Artist: "Band (Official)", RequestedBy: "ana"},
 		youtube.MusicItem{VideoID: "b", Title: "Dos (Remix)", RequestedBy: "bob"})
 	if strings.ContainsAny(line, "()") || strings.Contains(line, "Live") || strings.Contains(line, "Remix") {
 		t.Errorf("announcement reads parenthesised text: %q", line)
+	}
+}
+
+func TestRadioTitlePrefersJapaneseBeforeLatinDashSuffix(t *testing.T) {
+	for in, want := range map[string]string{
+		"アイドル - YOASOBI":        "アイドル",
+		"夜に駆ける — YOASOBI":       "夜に駆ける",
+		"Song - Artist":         "Song - Artist",
+		"アイドル - 夜に駆ける":          "アイドル - 夜に駆ける",
+		"アイドル (Live) - YOASOBI": "アイドル",
+	} {
+		if got := radioTitle(in); got != want {
+			t.Errorf("radioTitle(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

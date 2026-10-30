@@ -1361,6 +1361,29 @@ func TestQueueSelectionMovesAndRemovesTogether(t *testing.T) {
 	}
 }
 
+func TestSongRequestsQueueShowsRemoveButton(t *testing.T) {
+	a, _ := playbackApp(t)
+	q := tracks("a", "b", "c")
+	a.play(q[0], q)
+	a.settings.SongRequests = true
+	a.nowPlaying.open, a.nowPlaying.queueOnly, a.nowPlaying.playerShown = true, true, true
+	tt := ui.NewTester(a.nowPlayingView, 1000, 700)
+	tt.Frame()
+
+	if !tt.HasText("Remove Track b from queue") {
+		t.Fatalf("request queue remove button missing: %q", tt.Texts())
+	}
+	if err := tt.Click("Remove Track b from queue"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ids(a.queue.items), []string{"a", "c"}; !slices.Equal(got, want) {
+		t.Fatalf("queue after row remove = %v, want %v", got, want)
+	}
+	if a.current.VideoID != "a" {
+		t.Fatalf("removing a request changed current track to %q", a.current.VideoID)
+	}
+}
+
 func TestQueueEditsAtTheEdges(t *testing.T) {
 	a, _ := playbackApp(t)
 	q := tracks("a", "b", "c", "d")

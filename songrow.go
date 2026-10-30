@@ -82,7 +82,7 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 	if playing {
 		container = sc.SecondaryContainer
 	}
-	var main, menuButton, menuAnchor ui.Element
+	var main, menuButton, menuAnchor, removeRequestButton ui.Element
 	hasAnchor := false
 	row.Children(func() {
 		main = ui.ButtonBase(c.Key(key + "-activate")).FocusRing(false)
@@ -163,6 +163,13 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 			// button opened points at the button.
 			menuAnchor, hasAnchor = a.menu.pointerAnchor(c, key)
 		})
+		if o.list == "queue" && a.settings.SongRequests {
+			removeRequestButton = m3.IconButton(c, m3.IconButtonSpec{
+				Icon: m3.IconClose, Label: "Remove " + item.Title + " from queue",
+				Kind: m3.StandardIcon, Size: m3.ExtraSmall32,
+				Disabled: o.position == a.queue.index, Key: key + "-request-remove",
+			})
+		}
 		// Keep the button in the focus order even while its dots are hidden.
 		// Removing it when the main button loses focus strands Tab here.
 		menuContainer := ui.Transparent
@@ -177,6 +184,9 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 			menuButton.Opacity(0).PassThrough()
 		}
 	})
+	if removeRequestButton.Clicked() {
+		a.removeFromQueue(o.position)
+	}
 	pointer := main.RightClicked() || menuButton.RightClicked()
 	if menuButton.Clicked() || pointer || main.Shortcut(ui.Shift, ui.KeyF10) {
 		// Read the pointer only when opening, so dragging the row still works.
