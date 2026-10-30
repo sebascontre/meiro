@@ -87,6 +87,8 @@ type Settings struct {
 	SongRequests bool `json:"songRequests,omitempty"`
 	// SongRequestLimit is how many songs one chatter may have waiting.
 	SongRequestLimit int `json:"songRequestLimit,omitempty"`
+	// OBSWidget enables the local browser-source overlay for OBS.
+	OBSWidget bool `json:"obsWidget,omitempty"`
 	// RadioVoice is the Google Text-to-Speech voice Radio Chatcito speaks
 	// with, such as "es-US-Chirp3-HD-Puck". Empty means that one.
 	RadioVoice string `json:"radioVoice,omitempty"`

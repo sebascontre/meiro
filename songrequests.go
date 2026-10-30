@@ -870,6 +870,33 @@ func (a *app) songRequestsCard(c *ui.Context) {
 					a.saveSettings()
 				}
 			})
+			ui.Column(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+					settingLabel(c, "OBS stream widget", "A transparent local browser source showing the current song, who requested it, and the next song. It is only accessible from this computer.").Grow(1)
+					on := a.settings.OBSWidget
+					if m3.Switch(c, &on, "OBS widget").Changed() {
+						a.setOBSWidget(on)
+					}
+				})
+				if a.settings.OBSWidget {
+					running, errText := a.obs.status()
+					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+						m3.Text(c, m3.BodyMedium, obsWidgetURL).TextColor(sc.OnSurfaceVariant).Grow(1)
+						copyURL := m3.Button(c, m3.ButtonSpec{Label: "Copy URL", Kind: m3.Tonal, Size: m3.Medium56, Key: "obs-widget-copy"})
+						if copyURL.Clicked() {
+							c.WriteClipboard(obsWidgetURL)
+							a.notice = "OBS widget URL copied"
+						}
+					})
+					if !running {
+						if errText != "" {
+							m3.Text(c, m3.BodyMedium, "Could not start the OBS widget: "+errText).TextColor(sc.Error).MaxLines(3)
+						} else {
+							m3.Text(c, m3.BodyMedium, "OBS widget is not running.").TextColor(sc.Error)
+						}
+					}
+				}
+			})
 			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 				settingLabel(c, "Always narrate (testing)", "Radio Chatcito speaks between every pair of songs, requested or not, instead of one in four requested transitions.").Grow(1)
 				always := a.settings.RadioAlways

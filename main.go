@@ -198,6 +198,11 @@ func (a *app) setup() {
 		a.openCredits(filepath.Join(directory, "credits.json"))
 		a.loadTTSKey(secretfile.File{Path: filepath.Join(directory, "google-tts-key.txt"), Keychain: mygo.Secrets, Name: credentialsKey})
 		a.loadTwitchToken(secretfile.File{Path: filepath.Join(directory, "twitch-token.txt"), Keychain: mygo.Secrets, Name: credentialsKey})
+		if a.settings.OBSWidget {
+			if err := a.obs.start(); err != nil {
+				log.Printf("starting OBS widget: %v", err)
+			}
+		}
 	} else {
 		a.account.signIn.err = err.Error()
 	}
@@ -263,6 +268,7 @@ func (a *app) openAudioCache() {
 
 // shutdown flushes the settings, then closes what belongs to the app.
 func (a *app) shutdown() {
+	a.obs.stop()
 	a.requests.stop()
 	a.requests.radio.stop()
 	a.discardRadioClip()

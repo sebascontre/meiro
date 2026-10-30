@@ -404,6 +404,7 @@ func (a *app) startTicker() {
 // track when one ends, and the system's media controls. It runs on the main
 // thread, from the ticker.
 func (a *app) poll() {
+	a.syncOBSWidget()
 	if !a.player.Active() {
 		return
 	}

@@ -41,6 +41,7 @@ type app struct {
 	media   systemmedia.Session
 	discord *discordrpc.Session
 	thumbs  *artwork.Cache
+	obs     *obsWidget
 	// displayScale is the largest scale of the displays, which sizes the
 	// artwork asked for; 0 in tests, which ask for the sizes the views name.
 	displayScale float32
@@ -201,6 +202,7 @@ func newApp() *app {
 		stop:       make(chan struct{}),
 		statsRange: 14,
 		keyboard:   keyboardState{hintDelay: hintDelay},
+		obs:        newOBSWidget(),
 	}
 	a.scrobble = newScrobbler()
 	a.playback = newPlayback(audio.NewURLs(resolveAudio(youtube.NewClient(youtube.Options{}))), a.settings.Volume)
