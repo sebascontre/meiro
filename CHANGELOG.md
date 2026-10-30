@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Radio narration drops periods.** Periods in titles, artists and usernames are no longer read as long pauses.
 - **Radio narration skips any bracketed text.** Besides parentheses, text inside `[]`, `{}`, `「」`, `『』`, `【】` and similar brackets is no longer read aloud.
 - **Radio narration skips the "Ch." channel suffix.** Artists like "Edomancer Ch." are read as "Edomancer".
 - **Radio narration reads capitalised words as words.** Words written entirely in capitals, like "OSHI NO KO", are no longer spelled out letter by letter.

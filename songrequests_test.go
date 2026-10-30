@@ -523,10 +523,10 @@ func TestRadioArtistDropsChannelSuffix(t *testing.T) {
 	for in, want := range map[string]string{
 		"Edomancer Ch.":         "Edomancer",
 		"Chrome Cottontail Ch.": "Chrome Cottontail",
-		"Ch.":                   "Ch.",
+		"Ch.":                   "Ch",
 		"Church":                "Church",
 	} {
-		if got := radioArtist(radioWords(in)); got != want {
+		if got := radioArtist(in); got != want {
 			t.Errorf("radioArtist(%q) = %q, want %q", in, got, want)
 		}
 	}
@@ -543,6 +543,20 @@ func TestRadioWordsSkipsEveryKindOfBracket(t *testing.T) {
 		"Song （remix） end":     "Song end",
 		"Mismatch (a] still":   "Mismatch",
 		"Stray ) closer":       "Stray closer",
+	} {
+		if got := radioWords(in); got != want {
+			t.Errorf("radioWords(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRadioWordsDropsPeriods(t *testing.T) {
+	for in, want := range map[string]string{
+		"Mr. Brightside": "Mr Brightside",
+		"S.O.S.":         "S O S",
+		"user.name":      "user name",
+		"Wait... what":   "Wait what",
+		"Edomancer Ch.":  "Edomancer Ch",
 	} {
 		if got := radioWords(in); got != want {
 			t.Errorf("radioWords(%q) = %q, want %q", in, got, want)

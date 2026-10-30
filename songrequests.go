@@ -217,7 +217,7 @@ func radioPick(previous, next youtube.MusicItem, salt string, n int) int {
 
 func radioDescribe(item youtube.MusicItem, title string, phrase int) string {
 	text := "«" + title + "»"
-	if artist := radioArtist(radioWords(item.Artist)); artist != "" {
+	if artist := radioArtist(item.Artist); artist != "" {
 		text += ", de " + artist
 	}
 	if user := radioWords(item.RequestedBy); user != "" {
@@ -230,7 +230,7 @@ func radioArtist(artist string) string {
 	if strings.EqualFold(strings.TrimSpace(artist), "itsyamivt") {
 		return "It´s Yami VT"
 	}
-	return trimChannelSuffix(artist)
+	return radioWords(trimChannelSuffix(artist))
 }
 
 // trimChannelSuffix drops the "Ch." suffix YouTube channels use, such as
@@ -322,6 +322,12 @@ func radioWords(text string) string {
 			continue
 		}
 		switch {
+		case r == '.':
+			// A period makes the voice pause for too long.
+			if depth == 0 {
+				b.WriteRune(' ')
+			}
+			continue
 		case r == '_':
 			if depth == 0 {
 				b.WriteRune(' ')
