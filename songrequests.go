@@ -37,7 +37,7 @@ const (
 )
 
 // requestCommands are the chat commands that ask for a song.
-var requestCommands = []string{"!sr", "!songrequest"}
+var requestCommands = []string{"!sr", "!songrequest", "!sr_id"}
 
 // songRequests is the reading of a Twitch chat, whose chatters add songs to
 // the queue. Its fields belong to the main thread.
@@ -88,6 +88,8 @@ type songRequests struct {
 	lookups map[string]int
 	// find looks a song up; tests replace it.
 	find func(ctx context.Context, query string) (youtube.MusicItem, error)
+	// findID resolves a YouTube video ID directly; tests replace it.
+	findID func(ctx context.Context, videoID string) (youtube.MusicItem, error)
 	// connect reads a chat until ctx ends; tests replace it.
 	connect              func(ctx context.Context, channel string, onMessage func(twitch.Message), onState func(bool))
 	connectAuthenticated func(ctx context.Context, channel, login, token string, onMessage func(twitch.Message), onState func(bool), onSend func(func(string) error))
@@ -421,7 +423,7 @@ func (a *app) radioPlanned(nextIndex int, next youtube.MusicItem) bool {
 // nothing.
 func requestQuery(text string) string {
 	command, query, _ := strings.Cut(strings.TrimSpace(text), " ")
-	for _, name := range requestCommands {
+	for _, name := range requestCommands[:2] {
 		if strings.EqualFold(command, name) {
 			query = strings.TrimSpace(query)
 			if utf8.RuneCountInString(query) > maxRequestLength {
@@ -444,23 +446,58 @@ func (a *app) handleChatFrom(source context.Context, m twitch.Message) {
 		a.undoLastRequest(m.User)
 		return
 	}
+	if id, ok := requestVideoID(m.Text); ok {
+		a.handleSongLookup(source, m.User, id, true)
+		return
+	}
 	query := requestQuery(m.Text)
 	if query == "" {
 		return
 	}
+	a.handleSongLookup(source, m.User, query, false)
+}
+
+func requestVideoID(text string) (string, bool) {
+	command, arg, _ := strings.Cut(strings.TrimSpace(text), " ")
+	if !strings.EqualFold(command, "!sr_id") {
+		return "", false
+	}
+	id := strings.TrimSpace(arg)
+	if !videoIDPattern.MatchString(id) {
+		return "", true
+	}
+	return id, true
+}
+
+func (a *app) handleSongLookup(source context.Context, user, query string, byID bool) {
 	r := &a.requests
 	limit := a.pendingRequestLimit()
-	if r.lookups[m.User]+a.pendingRequests(m.User) >= limit {
-		a.notice = m.User + " has " + fmt.Sprint(limit) + " songs waiting already"
-		a.replyInChat(fmt.Sprintf("@%s: alcanzaste el límite de %d canciones en cola.", m.User, limit))
+	if r.lookups[user]+a.pendingRequests(user) >= limit {
+		a.notice = user + " has " + fmt.Sprint(limit) + " songs waiting already"
+		a.replyInChat(fmt.Sprintf("@%s: alcanzaste el límite de %d canciones en cola.", user, limit))
+		return
+	}
+	if byID && !videoIDPattern.MatchString(query) {
+		a.replyInChat(fmt.Sprintf("@%s: usa !sr_id seguido de un ID de video de YouTube válido.", user))
 		return
 	}
 	if r.lookups == nil {
 		r.lookups = map[string]int{}
 	}
-	r.lookups[m.User]++
+	r.lookups[user]++
 	find := r.find
-	if find == nil {
+	if byID {
+		findID := r.findID
+		if findID == nil {
+			client := a.client()
+			findID = func(ctx context.Context, id string) (youtube.MusicItem, error) {
+				return findLinked(ctx, client, id)
+			}
+		}
+		find = func(ctx context.Context, id string) (youtube.MusicItem, error) {
+			return findID(ctx, id)
+		}
+	} else if find == nil {
 		client := a.client()
 		find = func(ctx context.Context, query string) (youtube.MusicItem, error) {
 			return findSong(ctx, client, query)
@@ -475,10 +512,10 @@ func (a *app) handleChatFrom(source context.Context, m twitch.Message) {
 		if source.Err() != nil {
 			return
 		}
-		if r.lookups[m.User]--; r.lookups[m.User] <= 0 {
-			delete(r.lookups, m.User)
+		if r.lookups[user]--; r.lookups[user] <= 0 {
+			delete(r.lookups, user)
 		}
-		a.addRequest(m.User, query, res)
+		a.addRequest(user, query, res)
 	})
 }
 
@@ -914,7 +951,7 @@ func (a *app) songRequestsCard(c *ui.Context) {
 	a.settingsCard(c, "Song requests", m3.IconMusicNote, func() {
 		ui.Column(c).Gap(12).Children(func() {
 			ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
-				settingLabel(c, "Twitch song requests", "Chatters add songs with !sr followed by a song and artist, or a YouTube link. Meiro shows who requested each song. Add a Twitch token below to confirm successful requests in chat with their queue position.").Grow(1)
+				settingLabel(c, "Twitch song requests", "Chatters use !sr with a song and artist or YouTube link, or !sr_id with an 11-character YouTube video ID. Meiro shows who requested each song. Add a Twitch token below to confirm successful requests in chat with their queue position.").Grow(1)
 				on := a.settings.SongRequests
 				if m3.Switch(c, &on, "Twitch song requests").Changed() {
 					a.settings.SongRequests = on

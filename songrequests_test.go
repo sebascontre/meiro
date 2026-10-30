@@ -22,6 +22,7 @@ func TestRequestQuery(t *testing.T) {
 		"!sr daft punk around the world": "daft punk around the world",
 		"!SR   spaced ":                  "spaced",
 		"!songrequest a b":               "a b",
+		"!sr_id dQw4w9WgXcQ":             "",
 		"!sr":                            "",
 		"hello !sr x":                    "",
 		"!srx foo":                       "",
@@ -29,6 +30,40 @@ func TestRequestQuery(t *testing.T) {
 		if got := requestQuery(in); got != want {
 			t.Errorf("requestQuery(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestRequestVideoID(t *testing.T) {
+	for in, want := range map[string]string{
+		"!sr_id dQw4w9WgXcQ":   "dQw4w9WgXcQ",
+		"!SR_ID  dQw4w9WgXcQ ": "dQw4w9WgXcQ",
+		"!sr_id":               "",
+		"!sr_id too-short":     "",
+		"!sr dQw4w9WgXcQ":      "",
+	} {
+		got, handled := requestVideoID(in)
+		if got != want || (in != "!sr dQw4w9WgXcQ" && !handled) ||
+			(in == "!sr dQw4w9WgXcQ" && handled) {
+			t.Errorf("requestVideoID(%q) = %q, %v; want %q", in, got, handled, want)
+		}
+	}
+}
+
+func TestSRIDLooksUpExactVideoAndQueuesIt(t *testing.T) {
+	a := newTestApp(t)
+	a.current = youtube.MusicItem{VideoID: "current", Title: "Now"}
+	a.queue.items, a.queue.index = []youtube.MusicItem{a.current}, 0
+	var lookedUp string
+	a.requests.findID = func(_ context.Context, id string) (youtube.MusicItem, error) {
+		lookedUp = id
+		return youtube.MusicItem{VideoID: id, Title: "Direct song", Kind: youtube.KindTrack}, nil
+	}
+
+	a.handleChat(twitch.Message{User: "ana", Text: "!sr_id dQw4w9WgXcQ"})
+
+	if lookedUp != "dQw4w9WgXcQ" || a.queue.len() != 2 ||
+		a.queue.at(1).VideoID != lookedUp || a.queue.at(1).RequestedBy != "ana" {
+		t.Fatalf("looked up %q, queue=%v", lookedUp, ids(a.queue.items))
 	}
 }
 
