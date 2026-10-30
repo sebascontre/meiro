@@ -146,10 +146,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: darwin-arm64, os: macos-latest }
-          - { platform: darwin-amd64, os: macos-latest }
-          - { platform: linux-amd64, os: ubuntu-latest }
-          - { platform: linux-arm64, os: ubuntu-24.04-arm }
           # Cross-compiled on Linux with MinGW-w64.
           - { platform: windows-amd64, os: ubuntu-latest }
     runs-on: ${{ matrix.os }}
@@ -209,14 +205,7 @@ jobs:
         include:
           # macOS ships one universal app for both processor architectures
           # rather than one per architecture.
-          - { platform: darwin-universal, os: macos-latest, variant: full }
-          - { platform: linux-amd64, os: ubuntu-latest, variant: full }
-          - { platform: linux-arm64, os: ubuntu-latest, variant: full }
           - { platform: windows-amd64, os: ubuntu-latest, variant: full }
-          - { platform: darwin-universal, os: macos-latest, variant: minimal }
-          - { platform: linux-amd64, os: ubuntu-latest, variant: minimal }
-          - { platform: linux-arm64, os: ubuntu-latest, variant: minimal }
-          - { platform: windows-amd64, os: ubuntu-latest, variant: minimal }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
