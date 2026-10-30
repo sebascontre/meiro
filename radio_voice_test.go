@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,5 +84,62 @@ func TestRadioTransitionSpeaksThenStartsTheNextSong(t *testing.T) {
 	}
 	if a.current.VideoID != "bbbbbbbbbbb" {
 		t.Fatalf("the next song did not start after the break: current %q", a.current.VideoID)
+	}
+}
+
+// toneThenSilence makes a clip that sounds for a second and is then silent.
+func toneThenSilence(t *testing.T, ffmpeg string, silence int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tail.mp3")
+	out, err := exec.Command(ffmpeg, "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+		"-af", fmt.Sprintf("apad=pad_dur=%d", silence), "-t", fmt.Sprint(1+silence), path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("making a clip: %v\n%s", err, out)
+	}
+	return path
+}
+
+func TestSilentTailMovesOnBeforeTheSongEnds(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	clip := toneThenSilence(t, ffmpeg, 6)
+	a := newTestApp(t)
+	a.settings.SongRequests = true
+	first := youtube.MusicItem{VideoID: "aaaaaaaaaaa", Title: "Uno", Kind: youtube.KindTrack}
+	second := youtube.MusicItem{VideoID: "bbbbbbbbbbb", Title: "Dos", Kind: youtube.KindTrack}
+	a.queue.items, a.queue.index, a.current = []youtube.MusicItem{first, second}, 0, first
+	a.total = 7 * time.Second
+	if err := a.player.Play(clip); err != nil {
+		t.Fatal(err)
+	}
+	moved := false
+	for start := time.Now(); time.Since(start) < 10*time.Second; time.Sleep(20 * time.Millisecond) {
+		if a.skipSilentTail() {
+			moved = true
+			break
+		}
+	}
+	if !moved || a.current.VideoID != "bbbbbbbbbbb" {
+		t.Fatalf("moved=%v current=%q silence=%s", moved, a.current.VideoID, a.player.TrailingSilence())
+	}
+}
+
+func TestSilentTailIsIgnoredOutsideSongRequests(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	clip := toneThenSilence(t, ffmpeg, 6)
+	a := newTestApp(t)
+	a.total = 7 * time.Second
+	if err := a.player.Play(clip); err != nil {
+		t.Fatal(err)
+	}
+	for start := time.Now(); a.player.TrailingSilence() < 2*time.Second && time.Since(start) < 10*time.Second; time.Sleep(20 * time.Millisecond) {
+	}
+	if a.skipSilentTail() {
+		t.Fatal("skipped with Song requests off")
 	}
 }

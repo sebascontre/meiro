@@ -251,7 +251,7 @@ func requestedSong(item youtube.MusicItem) bool {
 // radioTransition schedules an occasional spoken link after the current song
 // ends and before the next request begins.
 func (a *app) radioTransition(previous, next youtube.MusicItem, nextIndex int) bool {
-	if !a.player.Ended() || !a.radioPlanned(nextIndex, next) {
+	if !(a.player.Ended() || a.endingEarly) || !a.radioPlanned(nextIndex, next) {
 		return false
 	}
 	line := radioAnnouncement(previous, next)

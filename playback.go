@@ -23,9 +23,11 @@ type playback struct {
 	current youtube.MusicItem
 	queue   queue
 	// total is the current track's length, once known.
-	total     time.Duration
-	scrub     float64
-	scrubbing bool
+	total time.Duration
+	// endingEarly is set while a song that went quiet is being moved on from.
+	endingEarly bool
+	scrub       float64
+	scrubbing   bool
 	// seekTarget is the position the user last asked for, which seeking moves
 	// the player to off the main thread.
 	seekTarget  time.Duration
@@ -452,6 +454,9 @@ func (a *app) poll() {
 			a.recoveries = 0 // it held, so the next break gets all its tries
 		}
 		a.observeListen()
+		if a.skipSilentTail() {
+			return
+		}
 		a.syncPreload()
 		a.ensureUpNext()
 		if !a.scrubbing {
@@ -469,6 +474,27 @@ func (a *app) trackEnded() {
 		return
 	}
 	a.advance()
+}
+
+// silentTailWindow is how far from the end of a song silence is taken as its
+// end while Song requests is on, and silentTailLength how long that silence
+// lasts.
+const (
+	silentTailWindow = 20 * time.Second
+	silentTailLength = 1500 * time.Millisecond
+)
+
+// skipSilentTail moves on from a requested song as soon as its last seconds
+// go quiet, instead of waiting out the silence. It reports whether it did.
+func (a *app) skipSilentTail() bool {
+	if !a.settings.SongRequests || a.repeat == repeatTrack || a.total <= 0 || a.requests.radio.busy() || a.stream.busy() ||
+		a.total-a.player.Position() > silentTailWindow || a.player.TrailingSilence() < silentTailLength {
+		return false
+	}
+	a.endingEarly = true
+	defer func() { a.endingEarly = false }()
+	a.advance()
+	return true
 }
 
 // advance plays the next track of the queue, waiting for recommendations at

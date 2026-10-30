@@ -512,6 +512,18 @@ func (p *Player) Ended() bool {
 	return p.session != nil && p.endedLocked(p.session)
 }
 
+// TrailingSilence is how long the stream has been silent up to what has been
+// read, which is zero while it sounds.
+func (p *Player) TrailingSilence() time.Duration {
+	p.mu.Lock()
+	s := p.session
+	p.mu.Unlock()
+	if s == nil {
+		return 0
+	}
+	return time.Duration(s.source.silent.Load()) * time.Second / bytesPerSecond
+}
+
 // Position returns how far playback has come, which leads where the user
 // hears by the audio device's buffer, a few tens of milliseconds.
 func (p *Player) Position() time.Duration {
@@ -1021,6 +1033,8 @@ type countingReader struct {
 	reader io.Reader
 	read   atomic.Int64
 	eof    atomic.Bool
+	// silent is how many bytes of silence the stream has ended in so far.
+	silent atomic.Int64
 	// finished is closed when a read fails or reaches the end.
 	finished chan struct{}
 	once     sync.Once
@@ -1040,6 +1054,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	}
 	n, err := c.reader.Read(p)
 	c.read.Add(int64(n))
+	c.noteSilence(p[:n])
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			c.eof.Store(true)
@@ -1053,6 +1068,32 @@ func (c *countingReader) Read(p []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// silentHigh is the high byte of a little-endian 16-bit sample whose size is
+// below 256, about -42 dBFS: 0x00 for small positive values, 0xff for small
+// negative ones.
+func silentHigh(b byte) bool { return b == 0x00 || b == 0xff }
+
+// noteSilence tracks how long the sound has been quiet at the end of what was
+// read. Samples are two bytes, so the chunk is read in whole frames.
+func (c *countingReader) noteSilence(chunk []byte) {
+	chunk = chunk[:len(chunk)&^3]
+	if len(chunk) == 0 {
+		return
+	}
+	quiet := 0
+	for i := len(chunk) - 1; i >= 0; i -= 2 {
+		if !silentHigh(chunk[i]) {
+			break
+		}
+		quiet += 2
+	}
+	if quiet == len(chunk) {
+		c.silent.Add(int64(quiet))
+		return
+	}
+	c.silent.Store(int64(quiet))
 }
 
 // boundedBuffer keeps the first limit bytes written to it, which is enough
