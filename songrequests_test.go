@@ -297,7 +297,7 @@ func TestGoogleSpeech(t *testing.T) {
 			Voice struct{ Name string }
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Input.Text != "hola" || body.Voice.Name == "" {
+		if body.Input.Text != "hola" || body.Voice.Name != googleSpeechVoice || body.Voice.Name != "es-US-Chirp3-HD-Puck" {
 			t.Errorf("request = %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"audioContent":"` + base64.StdEncoding.EncodeToString([]byte("mp3")) + `"}`))

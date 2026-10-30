@@ -21,7 +21,7 @@ var googleSpeechEndpoint = googleSpeechURL
 
 const (
 	googleSpeechURL   = "https://texttospeech.googleapis.com/v1/text:synthesize"
-	googleSpeechVoice = "es-US-Neural2-B"
+	googleSpeechVoice = "es-US-Chirp3-HD-Puck"
 	googleSpeechLang  = "es-US"
 	maxSpeechAudio    = 4 << 20
 )
