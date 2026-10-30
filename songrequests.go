@@ -232,8 +232,17 @@ func radioAnnouncement(previous, next youtube.MusicItem) string {
 
 func radioWords(text string) string {
 	var b strings.Builder
+	depth := 0
 	for _, r := range strings.TrimSpace(text) {
-		if r < ' ' || r == 0x7f {
+		// What is in parentheses, such as "(Remastered)", is not read aloud.
+		switch {
+		case r == '(':
+			depth++
+			continue
+		case r == ')':
+			depth = max(depth-1, 0)
+			continue
+		case depth > 0 || r < ' ' || r == 0x7f:
 			continue
 		}
 		if b.Len() >= 160 {
@@ -241,7 +250,7 @@ func radioWords(text string) string {
 		}
 		b.WriteRune(r)
 	}
-	return strings.TrimSpace(b.String())
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func requestedSong(item youtube.MusicItem) bool {

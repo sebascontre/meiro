@@ -298,3 +298,24 @@ func TestRadioAnnouncementVariesButIsStablePerPair(t *testing.T) {
 		t.Errorf("only %d different announcements in 40 transitions", len(seen))
 	}
 }
+
+func TestRadioWordsSkipsParentheses(t *testing.T) {
+	for in, want := range map[string]string{
+		"Get Lucky (feat. Pharrell Williams)": "Get Lucky",
+		"One (Remastered (2011)) More Time":   "One More Time",
+		"(Intro) Hola":                        "Hola",
+		"Sin cerrar (nota":                    "Sin cerrar",
+		"Cierre ) suelto":                     "Cierre suelto",
+		"Normal":                              "Normal",
+	} {
+		if got := radioWords(in); got != want {
+			t.Errorf("radioWords(%q) = %q, want %q", in, got, want)
+		}
+	}
+	line := radioAnnouncement(
+		youtube.MusicItem{VideoID: "a", Title: "Uno (Live)", Artist: "Band (Official)", RequestedBy: "ana"},
+		youtube.MusicItem{VideoID: "b", Title: "Dos (Remix)", RequestedBy: "bob"})
+	if strings.ContainsAny(line, "()") || strings.Contains(line, "Live") || strings.Contains(line, "Remix") {
+		t.Errorf("announcement reads parenthesised text: %q", line)
+	}
+}
