@@ -447,6 +447,25 @@ func TestRadioAnnouncementVariesButIsStablePerPair(t *testing.T) {
 	}
 }
 
+func TestRadioHasOneHundredAnnouncementScripts(t *testing.T) {
+	if got := len(radioScripts); got != 100 {
+		t.Fatalf("radioScripts has %d entries, want 100", got)
+	}
+	seen := make(map[string]bool, len(radioScripts))
+	for i, script := range radioScripts {
+		if !strings.Contains(script, "%P") || !strings.Contains(script, "%N") {
+			t.Errorf("radioScripts[%d] is missing a song placeholder: %q", i, script)
+		}
+		if !strings.Contains(script, "Radio Chatcito") {
+			t.Errorf("radioScripts[%d] does not name Radio Chatcito: %q", i, script)
+		}
+		if seen[script] {
+			t.Errorf("radioScripts[%d] duplicates another line: %q", i, script)
+		}
+		seen[script] = true
+	}
+}
+
 func TestRadioWordsSkipsParentheses(t *testing.T) {
 	for in, want := range map[string]string{
 		"Get Lucky (feat. Pharrell Williams)": "Get Lucky",

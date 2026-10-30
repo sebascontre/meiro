@@ -30,7 +30,7 @@ func TestRouteTableIsComplete(t *testing.T) {
 			t.Errorf("%s leads to %s with id %q", r.path(id), got.pattern, gotID)
 		}
 	}
-	for id := routeNotFound + 1; id <= routeArtist; id++ {
+	for id := routeNotFound + 1; id <= routePodcast; id++ {
 		if !seen[id] {
 			t.Errorf("route %d has no entry in routes", id)
 		}
@@ -39,6 +39,26 @@ func TestRouteTableIsComplete(t *testing.T) {
 		if _, ok := detailRoute(kind); !ok {
 			t.Errorf("target kind %d has no page", kind)
 		}
+	}
+}
+
+func TestSongRequestRouteSitsAboveSettingsInRail(t *testing.T) {
+	songRequests := routeByID(routeSongRequests)
+	settings := routeByID(routeSettings)
+	if !songRequests.rail.footer || !settings.rail.footer {
+		t.Fatal("Song Request and Settings must both be pinned in the rail footer")
+	}
+	songIndex, settingsIndex := -1, -1
+	for i := range routes {
+		switch routes[i].id {
+		case routeSongRequests:
+			songIndex = i
+		case routeSettings:
+			settingsIndex = i
+		}
+	}
+	if songIndex < 0 || settingsIndex != songIndex+1 {
+		t.Fatalf("Song Request route index=%d, Settings route index=%d; want adjacent with Song Request first", songIndex, settingsIndex)
 	}
 }
 

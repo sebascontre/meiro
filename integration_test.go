@@ -116,6 +116,7 @@ func TestEveryPageLoadsAndDraws(t *testing.T) {
 		{"/library", []string{"Library", "Your library lives here"}},
 		{"/search", []string{"Find your next favourite"}},
 		{"/settings", []string{"Settings", "Appearance"}},
+		{"/song-requests", []string{"Song Request", "Twitch song requests"}},
 		{"/album/MPREb_test", []string{"Album Track One"}},
 		{"/playlist/VLPL_video", []string{"Playlist video"}},
 		{"/artist/UCartist", []string{"Aurora Vale", "Artist Track"}},

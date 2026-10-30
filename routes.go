@@ -23,6 +23,7 @@ const (
 	routeLibrary
 	routeRecap
 	routeSearch
+	routeSongRequests
 	routeSettings
 	routeStats
 	routeAlbum
@@ -153,6 +154,10 @@ func appRoutes() []route {
 			},
 			// The recap is built from the account's play history.
 			needsAccount: &signInPrompt{m3.IconTrending, "Your recap lives here", "Sign in to see the music you have had on repeat.", "the music you have had on repeat"},
+		},
+		{
+			id: routeSongRequests, pattern: "/song-requests", title: "Song Request", rail: &railEntry{label: "Song Request", icon: m3.IconMusicNote, filled: m3.IconMusicNote, footer: true}, heading: heading("Song Request"), nav: routeSongRequests, bare: true,
+			view: (*app).songRequestsPage,
 		},
 		{
 			id: routeSettings, pattern: "/settings", title: "Settings", rail: &railEntry{label: "Settings", action: keymap.Settings, icon: m3.IconSettings, filled: m3.IconSettings, footer: true}, heading: heading("Settings"), nav: routeSettings, bare: true,

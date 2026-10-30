@@ -65,7 +65,6 @@ var settingsRows = []settingsRow{
 
 	{key: "h-system", heading: "System"},
 	{key: "desktop", search: "desktop linux notifications discord rich presence activity status tray icon wordmark o mark low key subtle", card: (*app).desktopCard},
-	{key: "songrequests", search: "twitch song requests chat stream streamer sr channel viewers queue", card: (*app).songRequestsCard},
 	{key: "keyboard", search: "keyboard shortcuts keys", card: (*app).keyboardCard},
 
 	{key: "h-data", heading: "Storage and privacy"},
