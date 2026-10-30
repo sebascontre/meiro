@@ -270,6 +270,7 @@ func (a *app) shutdown() {
 	a.requests.tokenLoad.stop()
 	a.requests.ttsLoad.stop()
 	a.requests.ttsTest.stop()
+	a.requests.ttsVoicesLoad.stop()
 	a.notificationArtwork.stop()
 	a.finishEpisodeProgress(true)
 	a.savePlayback(0)

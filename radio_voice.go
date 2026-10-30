@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,17 +22,91 @@ var googleSpeechEndpoint = googleSpeechURL
 
 const (
 	googleSpeechURL   = "https://texttospeech.googleapis.com/v1/text:synthesize"
+	googleVoicesURL   = "https://texttospeech.googleapis.com/v1/voices"
 	googleSpeechVoice = "es-US-Chirp3-HD-Puck"
-	googleSpeechLang  = "es-US"
 	maxSpeechAudio    = 4 << 20
 )
 
+// voiceLanguage is the language code a Google voice name starts with, such as
+// "es-US" for "es-US-Chirp3-HD-Puck".
+func voiceLanguage(voice string) string {
+	parts := strings.SplitN(voice, "-", 3)
+	if len(parts) < 3 {
+		return "es-US"
+	}
+	return parts[0] + "-" + parts[1]
+}
+
+// chirpNames are the Chirp 3: HD voices, offered in Spanish when Google's own
+// list cannot be fetched.
+var chirpNames = []string{
+	"Achernar", "Achird", "Algenib", "Algieba", "Alnilam", "Aoede", "Autonoe", "Callirrhoe", "Charon", "Despina",
+	"Enceladus", "Erinome", "Fenrir", "Gacrux", "Iapetus", "Kore", "Laomedeia", "Leda", "Orus", "Puck",
+	"Pulcherrima", "Rasalgethi", "Sadachbia", "Sadaltager", "Schedar", "Sulafat", "Umbriel", "Vindemiatrix",
+	"Zephyr", "Zubenelgenubi",
+}
+
+func defaultRadioVoices() []string {
+	voices := make([]string, len(chirpNames))
+	for i, name := range chirpNames {
+		voices[i] = "es-US-Chirp3-HD-" + name
+	}
+	return voices
+}
+
+// googleVoices lists the Spanish Chirp 3: HD voices Google offers, sorted.
+func googleVoices(ctx context.Context, endpoint, apiKey string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?key="+url.QueryEscape(apiKey), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, errors.New("could not reach Google Text-to-Speech")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Google Text-to-Speech voices: %s", resp.Status)
+	}
+	var reply struct {
+		Voices []struct {
+			Name string `json:"name"`
+		} `json:"voices"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&reply); err != nil {
+		return nil, fmt.Errorf("reading the Google voices: %w", err)
+	}
+	var voices []string
+	for _, v := range reply.Voices {
+		if strings.HasPrefix(v.Name, "es-") && strings.Contains(v.Name, "-Chirp3-HD-") {
+			voices = append(voices, v.Name)
+		}
+	}
+	if len(voices) == 0 {
+		return nil, errors.New("Google lists no Spanish Chirp 3: HD voices")
+	}
+	slices.Sort(voices)
+	return voices, nil
+}
+
+// voiceLabel is a voice as the menu shows it: "Puck (es-US)".
+func voiceLabel(voice string) string {
+	_, name, ok := strings.Cut(voice, "-Chirp3-HD-")
+	if !ok {
+		return voice
+	}
+	return name + " (" + voiceLanguage(voice) + ")"
+}
+
 // googleSpeech synthesizes text with Google Cloud Text-to-Speech and returns
 // MP3 audio.
-func googleSpeech(ctx context.Context, endpoint, apiKey, text string) ([]byte, error) {
+func googleSpeech(ctx context.Context, endpoint, apiKey, voice, text string) ([]byte, error) {
+	if voice == "" {
+		voice = googleSpeechVoice
+	}
 	body, err := json.Marshal(map[string]any{
 		"input":       map[string]string{"text": text},
-		"voice":       map[string]string{"languageCode": googleSpeechLang, "name": googleSpeechVoice},
+		"voice":       map[string]string{"languageCode": voiceLanguage(voice), "name": voice},
 		"audioConfig": map[string]any{"audioEncoding": "MP3", "speakingRate": 1.0},
 	})
 	if err != nil {
@@ -73,10 +148,10 @@ func googleSpeech(ctx context.Context, endpoint, apiKey, text string) ([]byte, e
 }
 
 // fetchRadioClip synthesizes text into a temporary MP3 the caller removes.
-func fetchRadioClip(ctx context.Context, apiKey, text string) (string, error) {
+func fetchRadioClip(ctx context.Context, apiKey, voice, text string) (string, error) {
 	fetch, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	audio, err := googleSpeech(fetch, googleSpeechEndpoint, apiKey, text)
+	audio, err := googleSpeech(fetch, googleSpeechEndpoint, apiKey, voice, text)
 	if err != nil {
 		return "", err
 	}
@@ -100,7 +175,7 @@ func fetchRadioClip(ctx context.Context, apiKey, text string) (string, error) {
 func (a *app) speakRadio(ctx context.Context, text, clip string) error {
 	if clip == "" {
 		var err error
-		if clip, err = fetchRadioClip(ctx, a.requests.ttsKey, text); err != nil {
+		if clip, err = fetchRadioClip(ctx, a.requests.ttsKey, a.settings.RadioVoice, text); err != nil {
 			return err
 		}
 	}

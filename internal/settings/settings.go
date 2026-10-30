@@ -85,6 +85,9 @@ type Settings struct {
 	// SongRequests lets the chat of TwitchChannel add songs to the queue
 	// with !sr.
 	SongRequests bool `json:"songRequests,omitempty"`
+	// RadioVoice is the Google Text-to-Speech voice Radio Chatcito speaks
+	// with, such as "es-US-Chirp3-HD-Puck". Empty means that one.
+	RadioVoice string `json:"radioVoice,omitempty"`
 	// RadioAlways makes Radio Chatcito speak between every pair of songs, for
 	// testing.
 	RadioAlways bool `json:"radioAlways,omitempty"`

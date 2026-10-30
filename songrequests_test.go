@@ -294,20 +294,20 @@ func TestGoogleSpeech(t *testing.T) {
 		}
 		var body struct {
 			Input struct{ Text string }
-			Voice struct{ Name string }
+			Voice struct{ Name, LanguageCode string }
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Input.Text != "hola" || body.Voice.Name != googleSpeechVoice {
+		if body.Input.Text != "hola" || body.Voice.Name != "es-ES-Chirp3-HD-Kore" || body.Voice.LanguageCode != "es-ES" {
 			t.Errorf("request = %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"audioContent":"` + base64.StdEncoding.EncodeToString([]byte("mp3")) + `"}`))
 	}))
 	defer server.Close()
-	audio, err := googleSpeech(context.Background(), server.URL, "k", "hola")
+	audio, err := googleSpeech(context.Background(), server.URL, "k", "es-ES-Chirp3-HD-Kore", "hola")
 	if err != nil || string(audio) != "mp3" {
 		t.Fatalf("audio %q, err %v", audio, err)
 	}
-	if _, err := googleSpeech(context.Background(), server.URL, "bad", "hola"); err == nil || !strings.Contains(err.Error(), "API key not valid") {
+	if _, err := googleSpeech(context.Background(), server.URL, "bad", "", "hola"); err == nil || !strings.Contains(err.Error(), "API key not valid") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -354,5 +354,25 @@ func TestRadioWordsSkipsParentheses(t *testing.T) {
 		youtube.MusicItem{VideoID: "b", Title: "Dos (Remix)", RequestedBy: "bob"})
 	if strings.ContainsAny(line, "()") || strings.Contains(line, "Live") || strings.Contains(line, "Remix") {
 		t.Errorf("announcement reads parenthesised text: %q", line)
+	}
+}
+
+func TestGoogleVoicesListsSpanishChirpVoices(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"voices":[
+			{"name":"es-US-Chirp3-HD-Puck"},{"name":"en-US-Chirp3-HD-Puck"},{"name":"es-US-Neural2-B"},
+			{"name":"es-ES-Chirp3-HD-Aoede"},{"name":"es-US-Chirp3-HD-Aoede"}]}`))
+	}))
+	defer server.Close()
+	voices, err := googleVoices(context.Background(), server.URL, "k")
+	want := []string{"es-ES-Chirp3-HD-Aoede", "es-US-Chirp3-HD-Aoede", "es-US-Chirp3-HD-Puck"}
+	if err != nil || !slices.Equal(voices, want) {
+		t.Fatalf("voices = %v, err %v", voices, err)
+	}
+	if got := voiceLabel("es-US-Chirp3-HD-Puck"); got != "Puck (es-US)" {
+		t.Errorf("label = %q", got)
+	}
+	if got := voiceLanguage("es-ES-Chirp3-HD-Kore"); got != "es-ES" {
+		t.Errorf("language = %q", got)
 	}
 }

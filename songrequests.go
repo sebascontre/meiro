@@ -74,6 +74,9 @@ type songRequests struct {
 	ttsLoad                   task
 	ttsTest                   task
 	ttsStatus                 string
+	ttsVoices                 []string
+	ttsVoicesLoad             task
+	ttsMenuOpen               bool
 	// channelText is what the channel field holds, and channelError what was
 	// wrong with the last one typed.
 	channelText, channelError string
@@ -323,8 +326,8 @@ func (a *app) prefetchRadio(next youtube.MusicItem) {
 	a.requests.clipLine = line
 	fetch := a.requests.fetchClip
 	if fetch == nil {
-		key := a.requests.ttsKey
-		fetch = func(ctx context.Context, line string) (string, error) { return fetchRadioClip(ctx, key, line) }
+		key, voice := a.requests.ttsKey, a.settings.RadioVoice
+		fetch = func(ctx context.Context, line string) (string, error) { return fetchRadioClip(ctx, key, voice, line) }
 	}
 	startTask(a, &a.requests.clipLoad, 20*time.Second, func(ctx context.Context) (string, error) {
 		return fetch(ctx, line)
@@ -584,8 +587,45 @@ func (a *app) loadTTSKey(store secretfile.File) {
 			return
 		}
 		r.ttsKey = key
+		a.loadRadioVoices()
 		a.syncPreload()
 	})
+}
+
+// loadRadioVoices asks Google which Spanish Chirp 3: HD voices exist, and
+// offers the known ones when it cannot say.
+func (a *app) loadRadioVoices() {
+	r := &a.requests
+	key := r.ttsKey
+	if key == "" {
+		r.ttsVoices = nil
+		return
+	}
+	startTask(a, &r.ttsVoicesLoad, 20*time.Second, func(ctx context.Context) ([]string, error) {
+		return googleVoices(ctx, googleVoicesURL, key)
+	}, func(voices []string, err error) {
+		if err != nil {
+			log.Printf("listing Google voices: %v", err)
+			voices = defaultRadioVoices()
+		}
+		r.ttsVoices = voices
+	})
+}
+
+// chooseRadioVoice keeps the voice picked in Settings. Audio fetched with the
+// old voice is dropped.
+func (a *app) chooseRadioVoice(voice string) {
+	a.settings.RadioVoice = voice
+	a.saveSettings()
+	a.discardRadioClip()
+	a.syncPreload()
+}
+
+func (a *app) radioVoice() string {
+	if a.settings.RadioVoice == "" {
+		return googleSpeechVoice
+	}
+	return a.settings.RadioVoice
 }
 
 // testRadioVoice speaks a sample line, so a wrong key or a disabled API shows
@@ -618,6 +658,7 @@ func (a *app) saveTTSKey(text string) {
 	r := &a.requests
 	key := cleanSpeechKey(text)
 	r.ttsKey, r.ttsText, r.ttsError = key, "", ""
+	a.loadRadioVoices()
 	a.discardRadioClip()
 	a.syncPreload()
 	store := r.ttsStore
@@ -869,6 +910,28 @@ func (a *app) songRequestsCard(c *ui.Context) {
 							a.saveTTSKey(a.requests.ttsText)
 						}
 					})
+				}
+				if a.requests.ttsKey != "" {
+					voices := a.requests.ttsVoices
+					if voices == nil {
+						voices = defaultRadioVoices()
+					}
+					anchor := m3.Button(c, m3.ButtonSpec{Label: "Voice: " + voiceLabel(a.radioVoice()), Icon: m3.IconExpandMore, Kind: m3.Outlined, Size: m3.Medium56, Key: "tts-voice"})
+					if anchor.Clicked() {
+						a.requests.ttsMenuOpen = !a.requests.ttsMenuOpen
+					}
+					if a.requests.ttsMenuOpen {
+						m3.Menu(c, anchor, &a.requests.ttsMenuOpen, 260, func() {
+							ui.Scroll(c.Key("tts-voices")).Height(320).Children(func() {
+								for _, voice := range voices {
+									if m3.MenuItem(c, voiceLabel(voice), nil).Clicked() {
+										a.chooseRadioVoice(voice)
+										a.requests.ttsMenuOpen = false
+									}
+								}
+							})
+						})
+					}
 				}
 				if a.requests.ttsStatus != "" {
 					m3.Text(c, m3.BodyMedium, a.requests.ttsStatus).TextColor(sc.OnSurfaceVariant).MaxLines(4)
