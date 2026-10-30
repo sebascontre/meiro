@@ -186,6 +186,25 @@ func (q *queue) remove(index int) bool {
 	return true
 }
 
+// promoteGenerated moves a generated track into the chosen part of the queue.
+// The song keeps its queue entry, but will no longer be discarded if autoplay
+// is refreshed.
+func (q *queue) promoteGenerated(index int, requestedBy string) (youtube.MusicItem, bool) {
+	if index < q.recStart || index < 0 || index >= len(q.items) {
+		return youtube.MusicItem{}, false
+	}
+	item := q.items[index]
+	if _, generated := q.generated[item.VideoID]; !generated {
+		return youtube.MusicItem{}, false
+	}
+	item.RequestedBy = requestedBy
+	if !q.remove(index) {
+		return youtube.MusicItem{}, false
+	}
+	q.insert(item, false, true)
+	return item, true
+}
+
 // clearUpcoming drops every track that follows the current one, the
 // generated tracks included, and reports whether there were any.
 func (q *queue) clearUpcoming() bool {

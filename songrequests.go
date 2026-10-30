@@ -449,14 +449,32 @@ func (a *app) addRequest(user, query string, res songResult) {
 		return
 	}
 	item := res.item
+	promoted := false
 	for i := max(a.queue.index, 0); i < a.queue.len(); i++ {
 		if a.queue.at(i).VideoID == item.VideoID {
-			a.notice = item.Title + " is already in the queue"
-			return
+			if _, generated := a.queue.generated[item.VideoID]; generated {
+				var ok bool
+				item, ok = a.queue.promoteGenerated(i, user)
+				if !ok {
+					a.notice = item.Title + " is already in the queue"
+					return
+				}
+				promoted = true
+				a.clearQueueSelection()
+				a.rememberQueued(item.VideoID)
+				a.learnCredits(item)
+				a.syncPreload()
+				a.syncSystemMedia()
+			} else {
+				a.notice = item.Title + " is already in the queue"
+				return
+			}
 		}
 	}
-	item.RequestedBy = user
-	a.enqueue(item, false)
+	if !promoted {
+		item.RequestedBy = user
+		a.enqueue(item, false)
+	}
 	a.notice = user + " requested " + item.Title
 	if position := requestedPosition(&a.queue, item.VideoID, user); position > 0 && a.requests.token != "" {
 		a.replyInChat(fmt.Sprintf("@%s: %q agregada, posición %d.", user, item.Title, position))

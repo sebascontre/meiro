@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,6 +78,42 @@ func TestSongRequestsQueueWithRequester(t *testing.T) {
 	}
 	if len(replies) != 3 || !strings.Contains(replies[2], "posición 4") {
 		t.Errorf("replies = %v, want third song at position 4", replies)
+	}
+}
+
+func TestSongRequestPromotesAnAutoplayTrackIntoTheRequestedQueue(t *testing.T) {
+	a := newTestApp(t)
+	a.settings.AutoPlay = true
+	current := youtube.MusicItem{VideoID: "current", Title: "Now", Kind: youtube.KindTrack}
+	a.current = current
+	a.queue.items = []youtube.MusicItem{
+		current,
+		{VideoID: "other", Title: "Other", Kind: youtube.KindTrack},
+		{VideoID: "requested", Title: "Requested song", Kind: youtube.KindTrack},
+		{VideoID: "last", Title: "Last", Kind: youtube.KindTrack},
+	}
+	a.queue.index, a.queue.recStart = 0, 1
+	a.queue.generated = map[string]struct{}{"other": {}, "requested": {}, "last": {}}
+
+	a.addRequest("ana", "requested song", songResult{item: youtube.MusicItem{
+		VideoID: "requested", Title: "Requested song", Kind: youtube.KindTrack,
+	}})
+
+	want := []string{"current", "requested", "other", "last"}
+	if got := ids(a.queue.items); !slices.Equal(got, want) {
+		t.Fatalf("queue = %v, want %v", got, want)
+	}
+	if a.queue.at(1).RequestedBy != "ana" {
+		t.Fatalf("promoted song requester = %q", a.queue.at(1).RequestedBy)
+	}
+	if a.queue.recStart != 2 {
+		t.Fatalf("autoplay starts at %d, want 2", a.queue.recStart)
+	}
+	if _, generated := a.queue.generated["requested"]; generated {
+		t.Fatal("promoted song is still marked as generated")
+	}
+	if next, ok := a.queue.next(true, repeatOff); !ok || a.queue.at(next).VideoID != "requested" {
+		t.Fatalf("next = %v, %v; want requested song", next, ok)
 	}
 }
 
