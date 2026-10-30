@@ -449,6 +449,17 @@ func TestRadioTitlePrefersJapaneseBeforeLatinDashSuffix(t *testing.T) {
 	}
 }
 
+func TestRadioArtistExpandsItsYamiVT(t *testing.T) {
+	for _, artist := range []string{"itsyamivt", "ItsYamiVT", " ITSYAMIVT "} {
+		if got := radioArtist(artist); got != "It´s Yami VT" {
+			t.Errorf("radioArtist(%q) = %q", artist, got)
+		}
+	}
+	if got := radioArtist("Other Artist"); got != "Other Artist" {
+		t.Errorf("radioArtist changed unrelated artist to %q", got)
+	}
+}
+
 func TestGoogleVoicesListsSpanishChirpVoices(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"voices":[

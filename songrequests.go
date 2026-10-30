@@ -215,13 +215,20 @@ func radioPick(previous, next youtube.MusicItem, salt string, n int) int {
 
 func radioDescribe(item youtube.MusicItem, title string, phrase int) string {
 	text := "«" + title + "»"
-	if artist := radioWords(item.Artist); artist != "" {
+	if artist := radioWords(radioArtist(item.Artist)); artist != "" {
 		text += ", de " + artist
 	}
 	if user := radioWords(item.RequestedBy); user != "" {
 		text += ", " + strings.ReplaceAll(radioRequestPhrases[phrase], "%U", user)
 	}
 	return text
+}
+
+func radioArtist(artist string) string {
+	if strings.EqualFold(strings.TrimSpace(artist), "itsyamivt") {
+		return "It´s Yami VT"
+	}
+	return artist
 }
 
 // radioAnnouncement is a short Spanish link between two songs. It varies from
