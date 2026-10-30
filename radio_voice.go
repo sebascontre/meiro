@@ -32,7 +32,7 @@ func googleSpeech(ctx context.Context, endpoint, apiKey, text string) ([]byte, e
 	body, err := json.Marshal(map[string]any{
 		"input":       map[string]string{"text": text},
 		"voice":       map[string]string{"languageCode": googleSpeechLang, "name": googleSpeechVoice},
-		"audioConfig": map[string]any{"audioEncoding": "MP3", "speakingRate": 1.0, "pitch": -1.0},
+		"audioConfig": map[string]any{"audioEncoding": "MP3", "speakingRate": 1.0},
 	})
 	if err != nil {
 		return nil, err
