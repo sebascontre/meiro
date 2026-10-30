@@ -450,8 +450,7 @@ func (a *app) addRequest(user, query string, res songResult) {
 	a.enqueue(item, false)
 	a.notice = user + " requested " + item.Title
 	if position := requestedPosition(&a.queue, item.VideoID, user); position > 0 && a.requests.token != "" {
-		a.replyInChat(fmt.Sprintf("@%s: %q fue agregada en la posición %d de la cola (la canción actual cuenta como posición 1).",
-			user, item.Title, position))
+		a.replyInChat(fmt.Sprintf("@%s: %q agregada, posición %d.", user, item.Title, position))
 	}
 }
 
