@@ -288,18 +288,40 @@ func hasNonJapaneseText(text string) bool {
 	return false
 }
 
+var bracketPairs = map[rune]rune{
+	'(': ')', '[': ']', '{': '}',
+	'（': '）', '［': '］', '｛': '｝',
+	'「': '」', '『': '』', '【': '】', '〔': '〕',
+	'〈': '〉', '《': '》', '〖': '〗', '〘': '〙', '〚': '〛',
+}
+
+func isBracketCloser(r rune) bool {
+	for _, closer := range bracketPairs {
+		if r == closer {
+			return true
+		}
+	}
+	return false
+}
+
 func radioWords(text string) string {
 	var b strings.Builder
-	depth := 0
+	var open []rune // closers expected for the brackets currently open
 	for _, r := range strings.TrimSpace(text) {
-		// What is in parentheses, such as "(Remastered)", is not read aloud.
+		depth := len(open)
+		// What is in brackets, such as "(Remastered)" or "【MV】", is not read aloud.
+		if closer, ok := bracketPairs[r]; ok {
+			open = append(open, closer)
+			continue
+		}
+		if depth > 0 && r == open[depth-1] {
+			open = open[:depth-1]
+			continue
+		}
+		if isBracketCloser(r) {
+			continue
+		}
 		switch {
-		case r == '(':
-			depth++
-			continue
-		case r == ')':
-			depth = max(depth-1, 0)
-			continue
 		case r == '_':
 			if depth == 0 {
 				b.WriteRune(' ')

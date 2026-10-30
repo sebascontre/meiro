@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Radio narration skips any bracketed text.** Besides parentheses, text inside `[]`, `{}`, `「」`, `『』`, `【】` and similar brackets is no longer read aloud.
 - **Radio narration skips the "Ch." channel suffix.** Artists like "Edomancer Ch." are read as "Edomancer".
 - **Radio narration reads capitalised words as words.** Words written entirely in capitals, like "OSHI NO KO", are no longer spelled out letter by letter.
 - **Twitch chat can request songs.** Turn on Song requests in Settings and enter your channel: viewers can use `!sr` with a song or YouTube link, or `!sr_id` with an 11-character YouTube video ID. Meiro adds it to the queue, which shows who asked. Viewers can use `!sr_error` to remove their most recently requested unplayed song. Configure how many songs each viewer can have waiting (1–20; default 3). Optionally connect a Twitch token to reply with the song's position or let viewers know when they reach the limit; Meiro keeps the token separate from Settings and encrypts it when the system has a credential store. With Song requests enabled, the queue also has an X button beside each row to remove songs; the current song cannot be removed.

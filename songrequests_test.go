@@ -531,3 +531,21 @@ func TestRadioArtistDropsChannelSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestRadioWordsSkipsEveryKindOfBracket(t *testing.T) {
+	for in, want := range map[string]string{
+		"Song [Official] name": "Song name",
+		"Song {live} name":     "Song name",
+		"曲名『MV』":               "曲名",
+		"【公式】曲名":               "曲名",
+		"「歌」タイトル":              "タイトル",
+		"A (b [c] d) e":        "A e",
+		"Song （remix） end":     "Song end",
+		"Mismatch (a] still":   "Mismatch",
+		"Stray ) closer":       "Stray closer",
+	} {
+		if got := radioWords(in); got != want {
+			t.Errorf("radioWords(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
