@@ -73,11 +73,41 @@ func TestSongRequestsQueueWithRequester(t *testing.T) {
 
 	a.handleChat(twitch.Message{User: "ana", Text: "!sr three"})
 	a.handleChat(twitch.Message{User: "ana", Text: "!sr four"}) // over the limit
-	if n := a.pendingRequests("ana"); n != maxPendingRequests {
-		t.Errorf("pending = %d, want %d", n, maxPendingRequests)
+	if n := a.pendingRequests("ana"); n != defaultPendingRequests {
+		t.Errorf("pending = %d, want %d", n, defaultPendingRequests)
 	}
-	if len(replies) != 3 || !strings.Contains(replies[2], "posición 4") {
-		t.Errorf("replies = %v, want third song at position 4", replies)
+	if len(replies) != 4 || !strings.Contains(replies[2], "posición 4") ||
+		!strings.Contains(replies[3], "límite de 3") {
+		t.Errorf("replies = %v, want third song at position 4 and limit notice", replies)
+	}
+}
+
+func TestSongRequestLimitIsConfigurableAndRepliesAtTheCap(t *testing.T) {
+	a := newTestApp(t)
+	a.settings.SongRequestLimit = 1
+	a.requests.token = "validated"
+	var replies []string
+	a.requests.sendChat = func(message string) error {
+		replies = append(replies, message)
+		return nil
+	}
+	a.requests.find = func(_ context.Context, query string) (youtube.MusicItem, error) {
+		return youtube.MusicItem{VideoID: query, Title: query, Kind: youtube.KindTrack}, nil
+	}
+	a.current = youtube.MusicItem{VideoID: "current"}
+	a.queue.items, a.queue.index = []youtube.MusicItem{a.current}, 0
+
+	a.handleChat(twitch.Message{User: "ana", Text: "!sr first"})
+	a.handleChat(twitch.Message{User: "ana", Text: "!sr second"})
+	if a.pendingRequestLimit() != 1 || a.pendingRequests("ana") != 1 {
+		t.Fatalf("limit=%d pending=%d", a.pendingRequestLimit(), a.pendingRequests("ana"))
+	}
+	if len(replies) != 2 || !strings.Contains(replies[1], "límite de 1") {
+		t.Fatalf("replies = %v, want cap notice", replies)
+	}
+	a.settings.SongRequestLimit = 5
+	if a.pendingRequestLimit() != 5 {
+		t.Fatalf("configured limit = %d, want 5", a.pendingRequestLimit())
 	}
 }
 
@@ -344,6 +374,7 @@ func TestRadioWordsSkipsParentheses(t *testing.T) {
 		"Sin cerrar (nota":                    "Sin cerrar",
 		"Cierre ) suelto":                     "Cierre suelto",
 		"Normal":                              "Normal",
+		"Ana_Perez":                           "Ana Perez",
 	} {
 		if got := radioWords(in); got != want {
 			t.Errorf("radioWords(%q) = %q, want %q", in, got, want)

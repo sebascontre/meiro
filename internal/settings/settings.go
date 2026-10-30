@@ -85,6 +85,8 @@ type Settings struct {
 	// SongRequests lets the chat of TwitchChannel add songs to the queue
 	// with !sr.
 	SongRequests bool `json:"songRequests,omitempty"`
+	// SongRequestLimit is how many songs one chatter may have waiting.
+	SongRequestLimit int `json:"songRequestLimit,omitempty"`
 	// RadioVoice is the Google Text-to-Speech voice Radio Chatcito speaks
 	// with, such as "es-US-Chirp3-HD-Puck". Empty means that one.
 	RadioVoice string `json:"radioVoice,omitempty"`

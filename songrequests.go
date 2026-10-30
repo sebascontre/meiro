@@ -25,9 +25,11 @@ import (
 )
 
 const (
-	// maxPendingRequests is how many songs of one chatter may wait in the
-	// queue, counting those still being looked up.
-	maxPendingRequests = 3
+	// defaultPendingRequests is how many songs of one chatter may wait in the
+	// queue by default, counting those still being looked up.
+	defaultPendingRequests = 3
+	minPendingRequests     = 1
+	maxPendingRequests     = 20
 	// maxRequestLength bounds the text searched for.
 	maxRequestLength = 150
 	requestTimeout   = 20 * time.Second
@@ -245,6 +247,11 @@ func radioWords(text string) string {
 		case r == ')':
 			depth = max(depth-1, 0)
 			continue
+		case r == '_':
+			if depth == 0 {
+				b.WriteRune(' ')
+			}
+			continue
 		case depth > 0 || r < ' ' || r == 0x7f:
 			continue
 		}
@@ -397,8 +404,10 @@ func (a *app) handleChatFrom(source context.Context, m twitch.Message) {
 		return
 	}
 	r := &a.requests
-	if r.lookups[m.User]+a.pendingRequests(m.User) >= maxPendingRequests {
-		a.notice = m.User + " has " + fmt.Sprint(maxPendingRequests) + " songs waiting already"
+	limit := a.pendingRequestLimit()
+	if r.lookups[m.User]+a.pendingRequests(m.User) >= limit {
+		a.notice = m.User + " has " + fmt.Sprint(limit) + " songs waiting already"
+		a.replyInChat(fmt.Sprintf("@%s: alcanzaste el límite de %d canciones en cola.", m.User, limit))
 		return
 	}
 	if r.lookups == nil {
@@ -431,6 +440,16 @@ func (a *app) handleChatFrom(source context.Context, m twitch.Message) {
 type songResult struct {
 	item youtube.MusicItem
 	err  error
+}
+
+// pendingRequestLimit returns the configured per-user cap, or the default
+// when older settings have no value.
+func (a *app) pendingRequestLimit() int {
+	limit := a.settings.SongRequestLimit
+	if limit <= 0 {
+		return defaultPendingRequests
+	}
+	return min(limit, maxPendingRequests)
 }
 
 // pendingRequests is how many songs a chatter asked for that are playing or
@@ -835,6 +854,19 @@ func (a *app) songRequestsCard(c *ui.Context) {
 				if m3.Switch(c, &on, "Twitch song requests").Changed() {
 					a.settings.SongRequests = on
 					a.syncSongRequests()
+					a.saveSettings()
+				}
+			})
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				settingLabel(c, "Requests per chatter", "Maximum songs each chatter can have waiting, including requests being searched. Limits from 1 to 20.").Grow(1)
+				limit := a.pendingRequestLimit()
+				if m3.Button(c, m3.ButtonSpec{Label: "-", Kind: m3.Outlined, Size: m3.Medium56, Disabled: limit <= minPendingRequests, Key: "song-request-limit-down"}).Clicked() {
+					a.settings.SongRequestLimit = max(minPendingRequests, limit-1)
+					a.saveSettings()
+				}
+				m3.Text(c, m3.TitleMedium, fmt.Sprint(limit)).TextColor(sc.OnSurface).MinWidth(24)
+				if m3.Button(c, m3.ButtonSpec{Label: "+", Kind: m3.Outlined, Size: m3.Medium56, Disabled: limit >= maxPendingRequests, Key: "song-request-limit-up"}).Clicked() {
+					a.settings.SongRequestLimit = min(maxPendingRequests, limit+1)
 					a.saveSettings()
 				}
 			})
