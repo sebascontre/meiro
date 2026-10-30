@@ -456,6 +456,10 @@ func TestRadioWordsSkipsParentheses(t *testing.T) {
 		"Cierre ) suelto":                     "Cierre suelto",
 		"Normal":                              "Normal",
 		"Ana_Perez":                           "Ana Perez",
+		"OSHI NO KO":                          "oshi no ko",
+		"YOASOBI - IDOL (Live)":               "yoasobi - idol",
+		"Hello WORLD I am A DJ":               "Hello world I am A dj",
+		"Mixed CASE Stays":                    "Mixed case Stays",
 	} {
 		if got := radioWords(in); got != want {
 			t.Errorf("radioWords(%q) = %q, want %q", in, got, want)

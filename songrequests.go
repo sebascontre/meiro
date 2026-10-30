@@ -217,7 +217,7 @@ func radioPick(previous, next youtube.MusicItem, salt string, n int) int {
 
 func radioDescribe(item youtube.MusicItem, title string, phrase int) string {
 	text := "«" + title + "»"
-	if artist := radioWords(radioArtist(item.Artist)); artist != "" {
+	if artist := radioArtist(radioWords(item.Artist)); artist != "" {
 		text += ", de " + artist
 	}
 	if user := radioWords(item.RequestedBy); user != "" {
@@ -303,7 +303,30 @@ func radioWords(text string) string {
 		}
 		b.WriteRune(r)
 	}
-	return strings.Join(strings.Fields(b.String()), " ")
+	words := strings.Fields(b.String())
+	for i, word := range words {
+		words[i] = softenCaps(word)
+	}
+	return strings.Join(words, " ")
+}
+
+// softenCaps lowercases a word written entirely in capitals, such as
+// "OSHI", so the voice says it as a word instead of spelling it letter by
+// letter.
+func softenCaps(word string) string {
+	letters := 0
+	for _, r := range word {
+		if unicode.IsLower(r) {
+			return word
+		}
+		if unicode.IsUpper(r) {
+			letters++
+		}
+	}
+	if letters < 2 {
+		return word
+	}
+	return strings.ToLower(word)
 }
 
 func requestedSong(item youtube.MusicItem) bool {
