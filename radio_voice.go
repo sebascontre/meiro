@@ -17,6 +17,8 @@ import (
 	"github.com/elianiva/meiro/player"
 )
 
+var googleSpeechEndpoint = googleSpeechURL
+
 const (
 	googleSpeechURL   = "https://texttospeech.googleapis.com/v1/text:synthesize"
 	googleSpeechVoice = "es-US-Neural2-B"
@@ -74,7 +76,7 @@ func googleSpeech(ctx context.Context, endpoint, apiKey, text string) ([]byte, e
 func fetchRadioClip(ctx context.Context, apiKey, text string) (string, error) {
 	fetch, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	audio, err := googleSpeech(fetch, googleSpeechURL, apiKey, text)
+	audio, err := googleSpeech(fetch, googleSpeechEndpoint, apiKey, text)
 	if err != nil {
 		return "", err
 	}
@@ -106,8 +108,12 @@ func (a *app) speakRadio(ctx context.Context, text, clip string) error {
 	return playRadioClip(ctx, clip)
 }
 
+// radioPlayerOptions are the options of the player that speaks; tests replace
+// it to run without a sound card.
+var radioPlayerOptions = playerOptions
+
 func playRadioClip(ctx context.Context, path string) error {
-	voice := player.New(playerOptions()...)
+	voice := player.New(radioPlayerOptions()...)
 	defer voice.Stop()
 	if err := voice.PlayContext(ctx, path); err != nil {
 		return err

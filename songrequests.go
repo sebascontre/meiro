@@ -72,6 +72,8 @@ type songRequests struct {
 	ttsKey, ttsText, ttsError string
 	ttsStore                  secretfile.File
 	ttsLoad                   task
+	ttsTest                   task
+	ttsStatus                 string
 	// channelText is what the channel field holds, and channelError what was
 	// wrong with the last one typed.
 	channelText, channelError string
@@ -271,6 +273,9 @@ func (a *app) radioTransition(previous, next youtube.MusicItem, nextIndex int) b
 	}, func(_ struct{}, err error) {
 		if err != nil {
 			log.Printf("speaking Twitch song request transition: %v", err)
+			a.requests.ttsStatus = "Last narration failed: " + err.Error()
+		} else {
+			a.requests.ttsStatus = ""
 		}
 		if !a.settings.SongRequests || a.current.VideoID != currentID || a.queue.index != currentIndex ||
 			nextIndex >= a.queue.len() || a.queue.at(nextIndex).VideoID != nextID {
@@ -317,6 +322,7 @@ func (a *app) prefetchRadio(next youtube.MusicItem) {
 	}, func(path string, err error) {
 		if err != nil {
 			log.Printf("fetching the radio voice ahead of time: %v", err)
+			a.requests.ttsStatus = "Last narration failed: " + err.Error()
 			return
 		}
 		if a.requests.clipLine != line {
@@ -553,6 +559,31 @@ func (a *app) loadTTSKey(store secretfile.File) {
 		}
 		r.ttsKey = key
 		a.syncPreload()
+	})
+}
+
+// testRadioVoice speaks a sample line, so a wrong key or a disabled API shows
+// up in Settings instead of on the air.
+func (a *app) testRadioVoice() {
+	r := &a.requests
+	key := r.ttsKey
+	r.ttsStatus = "Testing the voice…"
+	speak := r.speakRadio
+	if speak == nil {
+		speak = a.speakRadio
+	}
+	startTask(a, &r.ttsTest, 45*time.Second, func(ctx context.Context) (struct{}, error) {
+		if key == "" {
+			return struct{}{}, errors.New("save a Google API key first")
+		}
+		return struct{}{}, speak(ctx, "Esto es Radio Chatcito. La voz funciona perfectamente.", "")
+	}, func(_ struct{}, err error) {
+		if err != nil {
+			log.Printf("testing the radio voice: %v", err)
+			r.ttsStatus = "Voice test failed: " + err.Error()
+			return
+		}
+		r.ttsStatus = "Voice test played."
 	})
 }
 
@@ -796,6 +827,9 @@ func (a *app) songRequestsCard(c *ui.Context) {
 						if m3.Button(c, m3.ButtonSpec{Label: "Remove", Kind: m3.Tonal, Size: m3.Medium56, Key: "tts-remove"}).Clicked() {
 							a.saveTTSKey("")
 						}
+						if m3.Button(c, m3.ButtonSpec{Label: "Test voice", Kind: m3.Filled, Size: m3.Medium56, Disabled: a.requests.ttsTest.busy(), Key: "tts-test"}).Clicked() {
+							a.testRadioVoice()
+						}
 					})
 				} else {
 					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -809,6 +843,9 @@ func (a *app) songRequestsCard(c *ui.Context) {
 							a.saveTTSKey(a.requests.ttsText)
 						}
 					})
+				}
+				if a.requests.ttsStatus != "" {
+					m3.Text(c, m3.BodyMedium, a.requests.ttsStatus).TextColor(sc.OnSurfaceVariant).MaxLines(4)
 				}
 				if a.requests.ttsError != "" {
 					m3.Text(c, m3.BodyMedium, a.requests.ttsError).TextColor(sc.Error).MaxLines(3)

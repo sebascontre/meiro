@@ -245,6 +245,7 @@ go_test(
         "playlist_sort_test.go",
         "queue_test.go",
         "songrequests_test.go",
+        "radio_voice_test.go",
         "routes_test.go",
         "scrobble_test.go",
         "shortcuts_test.go",
