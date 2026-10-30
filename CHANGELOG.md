@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Radio Chatcito has a broader, livelier set of announcements.** Dozens of new original lines bring more humor and energy to song transitions.
 - **Radio narration drops periods.** Periods in titles, artists and usernames are no longer read as long pauses.
 - **Radio narration skips any bracketed text.** Besides parentheses, text inside `[]`, `{}`, `「」`, `『』`, `【】` and similar brackets is no longer read aloud.
 - **Radio narration skips the "Ch." channel suffix.** Artists like "Edomancer Ch." are read as "Edomancer".
