@@ -29,12 +29,14 @@ type State struct {
 	Items []youtube.MusicItem `json:"items"`
 	// Index is the place of the current track in Items.
 	Index int `json:"index"`
-	// RecStart is the place of the first generated track, or -1.
+	// RecStart is the place of the first generated track still to play, or -1.
 	RecStart int `json:"recStart"`
 	// PlayNext is the track the user asked to play next, if any.
 	PlayNext string `json:"playNext,omitempty"`
 	// Source names where the chosen tracks came from.
 	Source string `json:"source,omitempty"`
+	// PlaylistMore resumes a playlist whose remaining songs were still loading.
+	PlaylistMore string `json:"playlistMore,omitempty"`
 	// Position is how far into the current track playback had come.
 	Position time.Duration `json:"position,omitempty"`
 	// Episodes are the podcast episodes left part-way through, the one left
@@ -101,7 +103,7 @@ func (s State) sanitize() State {
 	if slices.ContainsFunc(out.Items, func(t youtube.MusicItem) bool { return t.VideoID == s.PlayNext }) {
 		out.PlayNext = s.PlayNext
 	}
-	out.Source = s.Source
+	out.Source, out.PlaylistMore = s.Source, s.PlaylistMore
 	if s.Position > 0 {
 		out.Position = s.Position
 	}

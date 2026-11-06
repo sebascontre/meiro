@@ -20,6 +20,20 @@ const (
 	KindEpisode ItemKind = "episode"
 )
 
+// AIDisclosure is what YouTube says about generative AI in a track's creation.
+// AIUnknown means YouTube supplied no determination; it does not mean the
+// track is human-made.
+type AIDisclosure uint8
+
+const (
+	AIUnknown AIDisclosure = iota
+	// AINone is a player response that supplied a track without an AI badge.
+	AINone
+	// AIAlteredOrGenerated is YouTube's "Made with AI" label: sounds or
+	// visuals were altered or fully generated.
+	AIAlteredOrGenerated
+)
+
 // TargetKind is what an item opens when it is chosen.
 type TargetKind uint8
 
@@ -144,8 +158,11 @@ type MusicItem struct {
 	Title         string   `json:"title,omitempty"`
 	Subtitle      string   `json:"subtitle,omitempty"`
 	Kind          ItemKind `json:"kind,omitempty"`
-	Duration      string   `json:"duration,omitempty"`
-	Thumbnail     string   `json:"thumbnail,omitempty"`
+	// AIDisclosure is the player's structured AI label, when Meiro has looked
+	// it up. It is saved with the queue so a restored queue keeps the filter.
+	AIDisclosure AIDisclosure `json:"aiDisclosure,omitempty"`
+	Duration     string       `json:"duration,omitempty"`
+	Thumbnail    string       `json:"thumbnail,omitempty"`
 	// RequestedBy is the chatter who asked for the track as a song request,
 	// or "" for a track the user chose.
 	RequestedBy string `json:"requestedBy,omitempty"`
@@ -177,6 +194,66 @@ type MusicItem struct {
 	// none. Artist is the first of them.
 	Artists string `json:"artists,omitempty"`
 	Album   string `json:"album,omitempty"`
+	// Byline preserves the text runs and browse IDs for player navigation.
+	// It is immutable after parsing; a pointer keeps MusicItem comparable.
+	Byline *TrackByline `json:"byline,omitempty"`
+}
+
+// TrackByline keeps the original separators and non-link metadata alongside
+// artist and album links. It is saved with the queue for offline restoration.
+type TrackByline struct {
+	Parts []BylinePart `json:"parts"`
+}
+
+type BylinePart struct {
+	Text     string `json:"text"`
+	BrowseID string `json:"browseId,omitempty"`
+}
+
+// Target accepts only artist and album destinations, including saved data.
+func (p BylinePart) Target() Target {
+	switch {
+	case isArtistID(p.BrowseID):
+		return Target{Kind: TargetArtist, ID: p.BrowseID}
+	case isAlbumID(p.BrowseID):
+		return Target{Kind: TargetAlbum, ID: p.BrowseID}
+	}
+	return Target{}
+}
+
+// PlayerByline also supports older queues that saved a single artist ID.
+// Only a whole metadata segment matching the credited artist becomes a link.
+func (item MusicItem) PlayerByline() []BylinePart {
+	if item.Byline != nil {
+		return item.Byline.Parts
+	}
+	if id := item.ArtistID(); id != "" && item.Artist != "" {
+		segments := strings.Split(item.Subtitle, " • ")
+		matches := 0
+		for _, text := range segments {
+			if text == item.Artist {
+				matches++
+			}
+		}
+		// Old queues cannot distinguish an artist called "Song" from the
+		// kind label when both appear. Leave ambiguous text unlinked.
+		if matches != 1 {
+			return []BylinePart{{Text: item.Subtitle}}
+		}
+		var parts []BylinePart
+		for i, text := range segments {
+			if i > 0 {
+				parts = append(parts, BylinePart{Text: " • "})
+			}
+			part := BylinePart{Text: text}
+			if text == item.Artist {
+				part.BrowseID = id
+			}
+			parts = append(parts, part)
+		}
+		return parts
+	}
+	return []BylinePart{{Text: item.Subtitle}}
 }
 
 // setCredits makes item credit the artists a byline links and the album.

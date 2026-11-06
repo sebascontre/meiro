@@ -10,6 +10,43 @@ import (
 	"testing"
 )
 
+func TestBrowseHeadingUsesTheAlbumsOwnCover(t *testing.T) {
+	const portrait = `"straplineThumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"artist.png"}]}}}`
+	const cover = `"thumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"album-small.png"},{"url":"album.png"}]}}}`
+	const title = `"title":{"runs":[{"text":"After Hours"}]}`
+	nested := func(header string) string {
+		return `{"contents":{"twoColumnBrowseResultsRenderer":{
+		"tabs":[{"tabRenderer":{"content":{"sectionListRenderer":{"contents":[{"musicResponsiveHeaderRenderer":` + header + `}]}}}}],
+		"secondaryContents":{"sectionListRenderer":{"contents":[
+		{"musicShelfRenderer":{"contents":[{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":"track"},"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Album track"}]}}}],"thumbnail":{"thumbnails":[{"url":"track.png"}]}}}]}},
+		{"musicResponsiveHeaderRenderer":{"title":{"simpleText":"Related album"},"thumbnail":{"thumbnails":[{"url":"related.png"}]}}}
+		]}}
+		}}}`
+	}
+	for _, test := range []struct {
+		name, body, title, thumbnail string
+		tracks                       int
+	}{
+		{"nested album", nested(`{` + portrait + `,` + title + `,` + cover + `}`), "After Hours", "album.png", 1},
+		{"missing cover never uses portrait or tracks", nested(`{` + portrait + `,` + title + `}`), "After Hours", "", 1},
+		{"missing header never uses related album", nested(`null`), "", "", 1},
+		{"legacy album", `{"header":{"musicDetailHeaderRenderer":{` + title + `,` + cover + `}}}`, "After Hours", "album.png", 0},
+		{"legacy artist", `{"header":{"musicImmersiveHeaderRenderer":{"title":{"simpleText":"Artist"},"thumbnail":{"thumbnails":[{"url":"portrait.png"}]}}}}`, "Artist", "portrait.png", 0},
+		{"legacy without cover", `{"header":{"musicResponsiveHeaderRenderer":{` + title + `}}}`, "After Hours", "", 0},
+		{"empty page", `{}`, "", "", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if !json.Valid([]byte(test.body)) {
+				t.Fatal("invalid canned response")
+			}
+			got := browseResult(decodeResponse(json.RawMessage(test.body)))
+			if got.Title != test.title || got.Thumbnail != test.thumbnail || len(got.Items) != test.tracks {
+				t.Fatalf("heading = %q, cover = %q, tracks = %d; want %q, %q, %d", got.Title, got.Thumbnail, len(got.Items), test.title, test.thumbnail, test.tracks)
+			}
+		})
+	}
+}
+
 func TestContinueBrowseReusesIssuedVisitorData(t *testing.T) {
 	const visitorData = "visitor-issued-by-server"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +102,27 @@ func TestContinueBrowseReusesIssuedVisitorData(t *testing.T) {
 	}
 	if len(result.Sections[0].Items) != 1 || result.Sections[0].Items[0].Title != "More Ambient" {
 		t.Fatalf("items = %#v, want More Ambient", result.Sections[0].Items)
+	}
+}
+
+// A page YouTube appends its items to carries the token of the page after it
+// in a trailing continuationItemRenderer, not in a shelf.
+func TestBrowseReadsTheTokenYouTubeAppendsWithItsItems(t *testing.T) {
+	const page = `{"onResponseReceivedActions":[{"appendContinuationItemsAction":{"continuationItems":[
+		{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":"track-1"},"flexColumns":[
+			{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Track 1"}]}}}]}},
+		{"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{
+			"token":"appended-more","request":"CONTINUATION_REQUEST_TYPE_BROWSE"}}}}
+	]}}]}`
+	result := browseResult(decodeResponse(json.RawMessage(page)))
+	if result.ContinuationToken != "appended-more" {
+		t.Errorf("continuation = %q, want appended-more", result.ContinuationToken)
+	}
+	if len(result.Sections) != 0 {
+		t.Errorf("sections = %#v, want the items to be the page's own", result.Sections)
+	}
+	if len(result.Items) != 1 || result.Items[0].VideoID != "track-1" {
+		t.Errorf("items = %#v, want track-1", result.Items)
 	}
 }
 

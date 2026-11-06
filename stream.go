@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/elianiva/meiro/internal/audio"
@@ -49,9 +50,10 @@ func (a *app) streamAudio(item youtube.MusicItem, startAt time.Duration, changed
 	// the app's state now.
 	loudnessClient := a.loudnessClient(item.VideoID)
 	known, knownOK := a.loudnessMap.Get(item.VideoID)
-	volume, normalize := a.volume, a.settings.NormalizeLoudness
+	volume, normalize, logarithmic := a.volume, a.settings.NormalizeLoudness, a.settings.LogVolume
 	speed := a.speedFor(item)
 	streams := a.streams
+	local := a.downloaded(item.VideoID)
 	log.Printf("playback: resolving video_id=%s", item.VideoID)
 	startTask(a, &a.stream, audio.ResolveTimeout, func(ctx context.Context) (resolvedAudio, error) {
 		a.player.Stop()
@@ -75,8 +77,8 @@ func (a *app) streamAudio(item youtube.MusicItem, startAt time.Duration, changed
 				fresh, freshOK = value, true
 			}
 		}
-		a.player.SetVolume(playbackVolume(volume, known.LoudnessDB, knownOK && normalize))
-		found, err := findAudio(ctx, streams, item, cache)
+		a.player.SetVolume(playbackVolume(volume, known.LoudnessDB, knownOK && normalize, logarithmic))
+		found, err := findAudio(ctx, streams, item, local, cache)
 		found.loudness, found.loudnessOK = fresh, freshOK
 		if err != nil || ctx.Err() != nil {
 			return found, err
@@ -100,6 +102,7 @@ func (a *app) streamAudio(item youtube.MusicItem, startAt time.Duration, changed
 		a.applyLoudness()
 		if found.total > 0 {
 			a.total = found.total
+			a.refreshLyrics()
 		}
 		if found.playErr != nil {
 			a.failPlayback(item, "player could not open", found.playErr.Error())
@@ -119,6 +122,7 @@ func (a *app) streamAudio(item youtube.MusicItem, startAt time.Duration, changed
 // cache is the audio cache the track was looked for in.
 func (a *app) audioStarted(item youtube.MusicItem, found resolvedAudio, position time.Duration, changed bool, cache *audio.Cache) {
 	a.skipped = 0
+	a.aiRefills = 0
 	if changed {
 		a.recordHistory(item)
 	}
@@ -152,7 +156,7 @@ func (a *app) following() (int, youtube.MusicItem, bool) {
 	if a.repeat == repeatTrack {
 		return -1, a.current, a.current.VideoID != ""
 	}
-	i, ok := a.queue.next(a.settings.AutoPlay, a.repeat)
+	i, ok := a.queue.nextEligible(a.settings.AutoPlay, a.repeat, a.settings.AutoSkipDisliked)
 	if !ok {
 		return 0, youtube.MusicItem{}, false
 	}
@@ -164,6 +168,11 @@ func (a *app) following() (int, youtube.MusicItem, bool) {
 // every poll and after anything that can change what follows.
 func (a *app) syncPreload() {
 	nextIndex, next, ok := a.following()
+	if ok && a.settings.ExcludeAIGenerated && isMusicTrack(next) && a.aiDisclosure(next) != youtube.AINone {
+		// Nothing is eligible to preload yet. Still run the cleanup below:
+		// the held audio may belong to a track the filter just removed.
+		ok = false
+	}
 	if !ok || !a.radioPlanned(nextIndex, next) {
 		a.discardRadioClip()
 	}
@@ -185,16 +194,17 @@ func (a *app) syncPreload() {
 	}
 	// A track that plays at another speed starts on its own: the player
 	// follows on at the speed of the track before.
-	if !ok || a.stream.busy() || a.preload.busy() || a.preloadFailed == next.VideoID || a.speedFor(next) != a.speedFor(a.current) ||
+	if !ok || a.starting() || a.preload.busy() || a.preloadFailed == next.VideoID || a.speedFor(next) != a.speedFor(a.current) ||
 		a.player.Preloaded() == next.VideoID || a.total <= 0 || !a.player.Playing() ||
 		a.total-a.player.Position() > preloadLead {
 		return
 	}
 	cache := a.currentAudioCache()
+	local := a.downloaded(next.VideoID)
 	a.preloadFor = next.VideoID
 	a.fetchLoudness(next, &a.preloadLoudnessLoad)
 	startTask(a, &a.preload, audio.ResolveTimeout, func(ctx context.Context) (preloadedAudio, error) {
-		found, err := findAudio(ctx, a.streams, next, cache)
+		found, err := findAudio(ctx, a.streams, next, local, cache)
 		if err == nil {
 			err = ctx.Err()
 		}
@@ -302,6 +312,7 @@ func (a *app) recoverStream(failure string) bool {
 	}
 	paused, bySleep := a.player.Paused(), a.suspendedWhilePlaying
 	cache := a.currentAudioCache()
+	local := a.downloaded(item.VideoID)
 	log.Printf("playback: stream broke off video_id=%s at=%s attempt=%d/%d: %s", item.VideoID, at.Round(time.Second), attempt, maxRecoveries, failure)
 	a.fetchLoudness(item, &a.loudnessLoad)
 	startTask(a, &a.stream, audio.ResolveTimeout+time.Duration(attempt)*recoveryBackoff, func(ctx context.Context) (resolvedAudio, error) {
@@ -309,7 +320,7 @@ func (a *app) recoverStream(failure string) bool {
 			return resolvedAudio{}, err
 		}
 		a.streams.Forget(item.VideoID)
-		found, err := findAudio(ctx, a.streams, item, cache)
+		found, err := findAudio(ctx, a.streams, item, local, cache)
 		if err != nil || ctx.Err() != nil {
 			return found, err
 		}
@@ -337,11 +348,23 @@ func (a *app) recoverStream(failure string) bool {
 	return true
 }
 
-// findAudio is where a track's audio is: in the cache, or from yt-dlp.
-func findAudio(ctx context.Context, streams *audio.URLs, item youtube.MusicItem, cache *audio.Cache) (resolvedAudio, error) {
+// findAudio is where a track's audio is: in local, the file it was downloaded
+// to, if that is still there, in the cache, or from yt-dlp.
+func findAudio(ctx context.Context, streams *audio.URLs, item youtube.MusicItem, local string, cache *audio.Cache) (resolvedAudio, error) {
 	found := resolvedAudio{total: parseDuration(item.Duration)}
-	if path, ok := cache.Get(item.VideoID); ok {
+	if local != "" {
+		if _, err := os.Stat(local); err != nil {
+			log.Printf("playback: downloaded audio unavailable video_id=%s: %v", item.VideoID, err)
+			local = ""
+		}
+	}
+	path, ok := local, local != ""
+	if ok {
+		log.Printf("playback: playing downloaded audio video_id=%s", item.VideoID)
+	} else if path, ok = cache.Get(item.VideoID); ok {
 		log.Printf("playback: audio cache hit video_id=%s", item.VideoID)
+	}
+	if ok {
 		found.url, found.fromCache = path, true
 		if found.total <= 0 {
 			// A track cached ahead of time was never resolved, so its
@@ -365,11 +388,16 @@ func findAudio(ctx context.Context, streams *audio.URLs, item youtube.MusicItem,
 // cache is big enough for a warmed track to survive until it plays, the
 // track is also downloaded from that URL.
 func (a *app) warmNext() {
-	if a.queue.remaining() < 1 {
+	_, next, ok := a.following()
+	if !ok {
 		return
 	}
-	next := a.queue.at(a.queue.index + 1)
-	if next.VideoID == "" || next.VideoID == a.current.VideoID {
+	if a.settings.ExcludeAIGenerated && isMusicTrack(next) && a.aiDisclosure(next) != youtube.AINone {
+		return
+	}
+	// In repeat-track mode following is the current track, whose audio is
+	// already playing; do not resolve it again.
+	if next.VideoID == "" || next.VideoID == a.current.VideoID || a.isDownloaded(next.VideoID) {
 		return
 	}
 	cache := a.currentAudioCache()

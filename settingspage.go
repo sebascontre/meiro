@@ -57,14 +57,16 @@ var settingsRows = []settingsRow{
 	{key: "lastfm", search: "last.fm scrobbling music service", card: (*app).lastFMCard},
 
 	{key: "h-look", heading: "Appearance and sound"},
-	{key: "appearance", search: "theme appearance system light dark colour color colours colors violet indigo blue sky teal green lime amber orange red rose orchid hue palette tonal spot vibrant expressive neutral monochrome artwork dynamic", card: (*app).appearanceCard},
-	{key: "sound", search: "sound audio normalize loudness equaliser volume", card: (*app).soundCard},
+	{key: "appearance", search: "theme appearance system light dark colour color colours colors violet indigo blue sky teal green lime amber orange red rose orchid hue palette tonal spot vibrant expressive neutral monochrome artwork dynamic matugen source", card: (*app).appearanceCard},
+	{key: "sound", search: "sound audio normalize loudness logarithmic equaliser volume", card: (*app).soundCard},
 
 	{key: "h-playback", heading: "Playback"},
+	{key: "playback", search: "auto skip disliked songs thumbs down", card: (*app).playbackCard},
 	{key: "crossfade", search: "crossfade fade transition gap between tracks songs seconds", card: (*app).crossfadeCard},
+	{key: "ai", search: "ai artificial intelligence generated exclude skip filter songs", card: (*app).aiFilterCard},
 
 	{key: "h-system", heading: "System"},
-	{key: "desktop", search: "desktop linux notifications discord rich presence activity status tray icon wordmark o mark low key subtle", card: (*app).desktopCard},
+	{key: "desktop", search: "desktop linux notifications discord rich presence activity status tray icon wordmark o mark low key subtle notch macbook lyrics", card: (*app).desktopCard},
 	{key: "keyboard", search: "keyboard shortcuts keys", card: (*app).keyboardCard},
 
 	{key: "h-data", heading: "Storage and privacy"},
@@ -107,7 +109,6 @@ func settingsRowsFor(query string) []settingsRow {
 }
 
 func (a *app) settingsSearchBar(c *ui.Context) {
-	sc := m3.Of(c).Scheme
 	const buttonWidth, maxWidth = float32(40), float32(520)
 	control := ui.Row(c.Key("settings-search")).Width(maxWidth).MinWidth(0).Shrink(1)
 	target := float32(0)
@@ -120,7 +121,7 @@ func (a *app) settingsSearchBar(c *ui.Context) {
 		control.Children(func() {
 			button := m3.IconButton(c, m3.IconButtonSpec{
 				Icon: m3.IconSearch, Label: "Search settings", Kind: m3.StandardIcon,
-				Size: m3.Small40, Key: "settings-search-open", Container: sc.SurfaceContainerHigh,
+				Size: m3.Small40, Key: "settings-search-open", Container: searchTint(c),
 			})
 			if button.Clicked() {
 				a.settingsSearch.open = true
@@ -137,6 +138,7 @@ func (a *app) settingsSearchBar(c *ui.Context) {
 			Key:         "settings-search-bar",
 			Focus:       &a.settingsSearch.field,
 			MaxWidth:    maxWidth,
+			Container:   searchTint(c),
 			Dismiss:     true,
 		})
 		if result.Changed || result.Cleared {
@@ -226,50 +228,64 @@ func (a *app) appearanceCard(c *ui.Context) {
 			}
 		})
 
-		// The seed: twelve colours, and any hue between.
-		ui.Column(c).Gap(14).Children(func() {
-			settingLabel(c, "Colour", "Every colour in the app grows from this one.")
-			ui.Row(c).Gap(8).Wrap().Children(func() {
-				for _, swatch := range swatches {
-					if a.swatch(c, swatch.name, swatch.hex) {
-						a.settings.Seed, a.settings.Dynamic = swatch.hex, false
-						a.saveSettings()
-					}
-				}
-			})
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-				m3.Text(c, m3.LabelLarge, "Hue").TextColor(sc.OnSurfaceVariant).Width(36).Shrink(0)
-				hue, _ := m3.HueOf(th.Seed)
-				value := hue
-				slider := m3.Slider(c, &value, 0, 360, m3.SliderSpec{Label: "Hue", Thickness: 16, Hue: true, Key: "hue"})
-				if slider.Changed() {
-					a.settings.Seed, a.settings.Dynamic = settings.SeedHex(m3.FromHue(value)), false
-					a.saveSettings()
-				}
-			})
-		})
-
-		// How the seed is spent.
-		ui.Column(c).Gap(14).Children(func() {
-			settingLabel(c, "Palette", "How boldly the colour is used.")
-			ui.Row(c).Gap(12).Wrap().Children(func() {
-				for _, style := range m3.Styles() {
-					if a.styleTile(c, style) {
-						a.settings.Style = int(style)
-						a.saveSettings()
-					}
-				}
-			})
-		})
-
-		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
-			settingLabel(c, "Colour from artwork", "Take the colour from the cover of the song that is playing.").Grow(1)
-			on := a.settings.Dynamic
-			if m3.Switch(c, &on, "Colour from artwork").Changed() {
-				a.settings.Dynamic = on
+		// Where the colours come from: one chosen here, the cover of the song
+		// playing, or the set matugen writes.
+		ui.Row(c).Gap(16).AlignItems(ui.Center).Wrap().Children(func() {
+			settingLabel(c, "Colour source", "").Grow(1)
+			source := 0
+			if a.settings.Matugen {
+				source = 2
+			} else if a.settings.Dynamic {
+				source = 1
+			}
+			if m3.ButtonGroup(c, "colour-source", &source, []string{"Fixed", "Artwork", "Matugen"}, nil) {
+				a.settings.Dynamic, a.settings.Matugen = source == 1, source == 2
 				a.saveSettings()
 			}
 		})
+		if a.settings.Matugen && a.colors == nil {
+			m3.Text(c, m3.BodyMedium, "Waiting for colors.json from matugen.").TextColor(sc.OnSurfaceVariant)
+		}
+
+		// The seed: twelve colours, and any hue between.
+		if !a.settings.Dynamic && !a.settings.Matugen {
+			ui.Column(c).Gap(14).Children(func() {
+				settingLabel(c, "Colour", "Every colour in the app grows from this one.")
+				ui.Row(c).Gap(8).Wrap().Children(func() {
+					for _, swatch := range swatches {
+						if a.swatch(c, swatch.name, swatch.hex) {
+							a.settings.Seed, a.settings.Dynamic, a.settings.Matugen = swatch.hex, false, false
+							a.saveSettings()
+						}
+					}
+				})
+				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+					m3.Text(c, m3.LabelLarge, "Hue").TextColor(sc.OnSurfaceVariant).Width(36).Shrink(0)
+					hue, _ := m3.HueOf(th.Seed)
+					value := hue
+					slider := m3.Slider(c, &value, 0, 360, m3.SliderSpec{Label: "Hue", Thickness: 16, Hue: true, Key: "hue"})
+					if slider.Changed() {
+						a.settings.Seed, a.settings.Dynamic, a.settings.Matugen = settings.SeedHex(m3.FromHue(value)), false, false
+						a.saveSettings()
+					}
+				})
+			})
+		}
+
+		// How the seed is spent.
+		if !a.settings.Matugen {
+			ui.Column(c).Gap(14).Children(func() {
+				settingLabel(c, "Palette", "How boldly the colour is used.")
+				ui.Row(c).Gap(12).Wrap().Children(func() {
+					for _, style := range m3.Styles() {
+						if a.styleTile(c, style) {
+							a.settings.Style = int(style)
+							a.saveSettings()
+						}
+					}
+				})
+			})
+		}
 
 		// How large the interface is, at a readable size in the interface
 		// that grows with it.
@@ -354,6 +370,15 @@ func (a *app) soundCard(c *ui.Context) {
 			}
 		})
 		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+			settingLabel(c, "Logarithmic volume", "Give the volume slider finer steps at low volumes.").Grow(1)
+			on := a.settings.LogVolume
+			if m3.Switch(c, &on, "Logarithmic volume").Changed() {
+				a.settings.LogVolume = on
+				a.saveSettings()
+				a.applyLoudness()
+			}
+		})
+		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 			settingLabel(c, "Equaliser", "Shape ten bands of the sound as you adjust them, without restarting the stream.").Grow(1)
 			on := a.settings.EQOn
 			if m3.Switch(c, &on, "Equaliser on").Changed() {
@@ -397,6 +422,19 @@ func (a *app) soundCard(c *ui.Context) {
 	})
 }
 
+func (a *app) playbackCard(c *ui.Context) {
+	a.settingsCard(c, "Disliked songs", m3.IconMusicNote, func() {
+		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+			settingLabel(c, "Auto-skip disliked songs", "Only songs known to be disliked are skipped.").Grow(1)
+			on := a.settings.AutoSkipDisliked
+			if m3.Switch(c, &on, "Skip disliked songs").Changed() {
+				a.settings.AutoSkipDisliked = on
+				a.saveSettings()
+			}
+		})
+	})
+}
+
 // crossfadeCard fades the end of a track into the start of the next. The
 // player takes a change live, so the slider applies as it moves and the
 // settings are saved once it has been quiet.
@@ -429,6 +467,22 @@ func (a *app) crossfadeCard(c *ui.Context) {
 	})
 }
 
+// aiFilterCard controls whether Meiro skips tracks YouTube marks as altered
+// or generated with AI. The label is checked before a track starts because
+// YouTube's list responses do not carry it.
+func (a *app) aiFilterCard(c *ui.Context) {
+	a.settingsCard(c, "AI-generated songs", m3.IconMusicNote, func() {
+		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+			settingLabel(c, "Skip AI-generated songs",
+				"Skip songs YouTube marks as made with AI. Meiro checks before each song plays; unlabelled AI music may still play.").Grow(1)
+			on := a.settings.ExcludeAIGenerated
+			if m3.Switch(c, &on, "Exclude AI-generated songs").Changed() {
+				a.setExcludeAIGenerated(on)
+			}
+		})
+	})
+}
+
 // swatch is one seed colour, drawn as the primary colour it would give. The
 // chosen one squares off and shows a check.
 func (a *app) swatch(c *ui.Context, name, hex string) bool {
@@ -439,7 +493,7 @@ func (a *app) swatch(c *ui.Context, name, hex string) bool {
 	if m3.Contrast(fill, on) < 3 {
 		on = ui.RGB(24, 24, 27)
 	}
-	selected := !a.settings.Dynamic && hex == a.settings.Seed
+	selected := !a.settings.Dynamic && !a.settings.Matugen && hex == a.settings.Seed
 	b := ui.ButtonBase(c.Key("swatch-" + hex))
 	rest := float32(28)
 	if selected {
@@ -617,40 +671,52 @@ func (a *app) chooseAudioCacheDirectory() {
 func (a *app) desktopCard(c *ui.Context) {
 	a.settingsCard(c, "Desktop", m3.IconNotifications, func() {
 		ui.Column(c).Gap(4).Children(func() {
-			a.desktopSwitch(c, "Track notifications", "Announce each new track. Clicking one brings Meiro back.",
-				a.settings.NotifyTrack, func(on bool) {
-					a.settings.NotifyTrack = on
-					if !on {
-						a.notificationArtwork.stop()
+			if runtime.GOOS == "darwin" {
+				a.notchSetting(c)
+				ui.Row(c.Key("keep-running")).Gap(16).AlignItems(ui.Center).Padding(8, 0).Children(func() {
+					settingLabel(c, "Keep running when closed", "Hide the window and keep Meiro running. Reopen it from the Dock, notch or menu bar.").Grow(1)
+					choice := a.closeToBackgroundChoice()
+					on := choice != nil && *choice
+					if m3.Switch(c, &on, "Keep running in background").Changed() {
+						a.answerClose(on, true)
 					}
 				})
-			a.desktopSwitch(c, "Menu bar icon", "Keep Meiro in the menu bar with play, next and quit.",
-				a.settings.ShowTray, func(on bool) {
-					a.settings.ShowTray = on
-					a.syncDesktop()
-				})
-			if trayMarkSupported(runtime.GOOS) {
-				ui.Row(c).Gap(16).AlignItems(ui.Center).Padding(8, 0).Children(func() {
-					settingLabel(c, "Tray icon", "Choose which icon appears in the system tray; the O mark is more subtle.").Grow(1)
-					mark := 0
-					if a.settings.TrayMark == settings.TrayMarkOMark {
-						mark = 1
-					}
-					if m3.ButtonGroup(c, "tray-mark", &mark, []string{"Wordmark", "O mark"}, nil) {
-						if mark == 1 {
-							a.settings.TrayMark = settings.TrayMarkOMark
-						} else {
-							a.settings.TrayMark = settings.TrayMarkWordmark
+			} else {
+				a.desktopSwitch(c, "Track notifications", "Announce each new track. Clicking one brings Meiro back.",
+					a.settings.NotifyTrack, func(on bool) {
+						a.settings.NotifyTrack = on
+						if !on {
+							a.notificationArtwork.stop()
 						}
+					})
+				a.desktopSwitch(c, "Menu bar icon", "Keep Meiro in the menu bar with play, next and quit.",
+					a.settings.ShowTray, func(on bool) {
+						a.settings.ShowTray = on
 						a.syncDesktop()
-						a.saveSettings()
-					}
-				})
+					})
+				if trayMarkSupported(runtime.GOOS) {
+					ui.Row(c).Gap(16).AlignItems(ui.Center).Padding(8, 0).Children(func() {
+						settingLabel(c, "Tray icon", "Choose which icon appears in the system tray; the O mark is more subtle.").Grow(1)
+						mark := 0
+						if a.settings.TrayMark == settings.TrayMarkOMark {
+							mark = 1
+						}
+						if m3.ButtonGroup(c, "tray-mark", &mark, []string{"Wordmark", "O mark"}, nil) {
+							if mark == 1 {
+								a.settings.TrayMark = settings.TrayMarkOMark
+							} else {
+								a.settings.TrayMark = settings.TrayMarkWordmark
+							}
+							a.syncDesktop()
+							a.saveSettings()
+						}
+					})
+				}
+				a.desktopSwitch(c, "Close to tray", "Closing the window keeps Meiro running in the tray instead of quitting.",
+					a.settings.CloseToTray != nil && *a.settings.CloseToTray, func(on bool) {
+						a.answerClose(on, true)
+					})
 			}
-			a.desktopSwitch(c, "Close to tray", "Closing the window keeps Meiro running in the tray instead of quitting.",
-				a.settings.CloseToTray != nil && *a.settings.CloseToTray, func(on bool) {
-					a.answerClose(on, true)
-				})
 			a.desktopSwitch(c, "Global shortcut", "Play or pause from anywhere with "+toggleShortcut+".",
 				a.settings.GlobalShortcut, func(on bool) {
 					a.settings.GlobalShortcut = on

@@ -17,13 +17,20 @@ import (
 
 	"github.com/elianiva/meiro/internal/artwork"
 	"github.com/elianiva/meiro/internal/audio"
+	"github.com/elianiva/meiro/internal/betterlyrics"
 	"github.com/elianiva/meiro/internal/lrclib"
+	"github.com/elianiva/meiro/internal/lyrics"
 	"github.com/elianiva/meiro/internal/proc"
 	"github.com/elianiva/meiro/internal/report"
 	"github.com/elianiva/meiro/internal/secretfile"
 	"github.com/elianiva/meiro/player"
 	"github.com/elianiva/meiro/youtube"
 )
+
+// artworkTransport supplies controlled cover responses without network access.
+type artworkTransport func(*http.Request) (*http.Response, error)
+
+func (f artworkTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // searches counts the search requests the fake YouTube has answered,
 // searchesMore the continuations of them, searchAsked is the last search
@@ -46,13 +53,23 @@ var (
 	// subscribeWrites counts the subscription writes, refused the same way.
 	subscribeWrites atomic.Int32
 	refuseWrites    atomic.Bool
+	// aiChecks counts the player-page lookups for AI labels.
+	aiChecks atomic.Int32
 	// duplicateWrites makes the fake answer an add to a playlist the way
 	// YouTube answers one for a song the playlist holds already.
 	duplicateWrites atomic.Bool
-	fakeLikeState   atomic.Value // what /next says of vid-3, as a string; "" says nothing
+	hypeSongAdded   atomic.Bool
+	// fakePlaylistGrows adds a second song to the growing playlist's page, as
+	// YouTube does when the user adds one elsewhere.
+	fakePlaylistGrows atomic.Bool
+	fakeLikeState     atomic.Value // what /next says of vid-3, as a string; "" says nothing
+	// fakeAI holds the video IDs the fake's player page labels as made with AI.
+	fakeAI sync.Map
 	// lastWrite is the last playlist write the fake YouTube was asked for:
 	// which endpoint, and the fields of its body.
 	lastWrite atomic.Value
+	// homeLoads counts the home feeds the fake has answered.
+	homeLoads atomic.Int32
 )
 
 // searchBody is the last search request the fake YouTube was asked for.
@@ -82,8 +99,12 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	reply := homeResponse
 	status := http.StatusOK
+	webNext := request.Header.Get("X-YouTube-Client-Name") == "1" && strings.HasSuffix(request.URL.Path, "/next")
 	switch {
-	case strings.HasSuffix(request.URL.Path, "/like/like"), strings.HasSuffix(request.URL.Path, "/like/removelike"):
+	case webNext:
+		aiChecks.Add(1)
+		reply = webNextResponse(nextVideoID(asked))
+	case strings.HasSuffix(request.URL.Path, "/like/like"), strings.HasSuffix(request.URL.Path, "/like/dislike"), strings.HasSuffix(request.URL.Path, "/like/removelike"):
 		likeWrites.Add(1)
 		recordWrite(request.URL.Path, asked)
 		reply = likeResponse
@@ -109,27 +130,59 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 		reply = nextResponse(fakeLikes())
 	case strings.HasSuffix(request.URL.Path, "/account/account_menu"):
 		reply = signedInAccountMenu
-	case strings.HasSuffix(request.URL.Path, "/account/accounts_list"):
+	case strings.HasSuffix(request.URL.Path, "/account/accounts_list"), strings.HasSuffix(request.URL.Path, "/getAccountSwitcherEndpoint"):
 		reply = accountsResponse
 	case strings.HasSuffix(request.URL.Path, "/music/get_search_suggestions"):
 		reply = suggestionsResponse
 	case strings.Contains(asked, "FEmusic_explore"):
 		reply = exploreResponse
+	case strings.Contains(asked, "FEmusic_home"):
+		homeLoads.Add(1)
+		reply = homeResponse
 	case strings.Contains(asked, `"continuation":"home-more"`):
 		homeMoreRequests.Add(1)
 		reply = homeMoreResponse
+	case strings.Contains(asked, "VLPL_page_token"):
+		reply = paginatedPlaylistResponse(0, 100, "", "playlist-tracks")
+	case strings.Contains(asked, "VLPL_paginated"):
+		reply = paginatedPlaylistResponse(0, 100, "playlist-tracks", "playlist-more")
+	case strings.Contains(asked, `"continuation":"playlist-tracks"`):
+		reply = paginatedPlaylistResponse(100, 146, "", "")
 	case strings.Contains(asked, `"continuation":"playlist-more"`):
 		reply = playlistSuggestionsResponse
-	case strings.Contains(asked, "FEmusic_listening_review"):
-		reply = recapResponse
+	case strings.Contains(asked, "VLPL_appended"):
+		reply = appendedPlaylistResponse(0, 100, "playlist-appended-more")
+	case strings.Contains(asked, `"continuation":"playlist-appended-more"`):
+		reply = appendedPlaylistResponse(100, 200, "playlist-appended-more-2")
+	case strings.Contains(asked, `"continuation":"playlist-appended-more-2"`):
+		reply = appendedPlaylistResponse(200, 246, "")
 	case strings.Contains(asked, "VLPL_video"):
 		reply = playlistPage()
 	case strings.Contains(asked, "VLPL_songs"):
 		reply = playlistSongsResponse
+	case strings.Contains(asked, "VLPL_grows"):
+		reply = growingPlaylistResponse()
+	case strings.Contains(asked, "VLPL_metadata"):
+		reply = metadataPlaylistResponse
+	case strings.Contains(asked, "VLPL_album_cover"):
+		reply = strings.NewReplacer("Deep Focus", "After Hours", "MPREb_test", "MPREb_nested").Replace(metadataPlaylistResponse)
+	case strings.Contains(asked, "MPREb_nested"):
+		reply = nestedAlbumResponse
+	case strings.Contains(asked, "UCguest"):
+		reply = strings.ReplaceAll(strings.ReplaceAll(artistPage(), fakeArtist, "UCguest"), "Aurora Vale", "Guest Artist")
+	case strings.Contains(asked, "VLPLhype"):
+		reply = `{"header":{"musicResponsiveHeaderRenderer":{"title":{"runs":[{"text":"Hype"}]}}},"contents":{"playlistVideoListRenderer":{"contents":[]}},"continuations":[{"nextContinuationData":{"continuation":"playlist-more"}}]}`
+		if hypeSongAdded.Load() {
+			reply = strings.Replace(reply, `"contents":[]`, `"contents":[{"playlistVideoRenderer":{"videoId":"suggestion-one","title":{"simpleText":"Suggestion One"}}}]`, 1)
+		}
 	case strings.HasSuffix(request.URL.Path, "/next") && strings.Contains(asked, `"song-related"`):
 		reply = songRelatedNextResponse
 	case strings.Contains(asked, "MPTRsong-related"):
 		reply = songRelatedResponse
+	case strings.Contains(asked, "MPREb_ai_run"):
+		reply = aiRunAlbumPage()
+	case strings.Contains(asked, "MPREb_ai"):
+		reply = aiAlbumPage
 	case strings.Contains(asked, "MPREb_test"):
 		reply = albumPage()
 	case strings.Contains(asked, "MPSPPLshow"):
@@ -161,8 +214,13 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 	case strings.HasSuffix(request.URL.Path, "/browse/edit_playlist"):
 		recordWrite(request.URL.Path, asked)
 		reply = editPlaylistResponse
-		if duplicateWrites.Load() && strings.Contains(asked, "ACTION_ADD_VIDEO") {
+		switch {
+		case refuseWrites.Load():
+			reply, status = rejectedResponse, http.StatusBadRequest
+		case duplicateWrites.Load() && strings.Contains(asked, "ACTION_ADD_VIDEO"):
 			reply = duplicatePlaylistResponse(asked)
+		case strings.Contains(asked, "PLhype") && strings.Contains(asked, "suggestion-one") && strings.Contains(asked, "ACTION_ADD_VIDEO"):
+			hypeSongAdded.Store(true)
 		}
 	case strings.Contains(asked, "search-more"):
 		searchesMore.Add(1)
@@ -214,6 +272,39 @@ func nextResponse(like string) string {
 		{"playlistPanelVideoRenderer":{"videoId":"vid-3","title":{"runs":[{"text":"Album Track One"}]},
 			"menu":{"menuRenderer":{"topLevelButtons":[{"likeButtonRenderer":{"target":{"videoId":"vid-3"},"likeStatus":"` + like + `"}}]}}}}
 	]}}}}}}]}}}}}`
+}
+
+// nextVideoID reads the video a WEB watch-page request is about.
+func nextVideoID(asked string) string {
+	var body struct {
+		VideoID string `json:"videoId"`
+	}
+	_ = json.Unmarshal([]byte(asked), &body)
+	return body.VideoID
+}
+
+// markFakeAI makes the fake's WEB watch page label videoID as made with AI.
+func markFakeAI(videoID string) {
+	fakeAI.Store(videoID, true)
+}
+
+func fakeMarksAI(videoID string) bool {
+	marked, _ := fakeAI.Load(videoID)
+	return marked == true
+}
+
+// webNextResponse is the regular YouTube watch page. It always carries an AI
+// badge on an unrelated related video, which the parser must ignore.
+func webNextResponse(videoID string) string {
+	badges := `"badges":[]`
+	if fakeMarksAI(videoID) {
+		badges = `"badges":[{"metadataBadgeRenderer":{"icon":{"iconType":"INFO"},"style":"BADGE_STYLE_TYPE_SIMPLE","label":"AI","accessibilityData":{"label":"AI: Content was made with AI"}}}]`
+	}
+	return fmt.Sprintf(`{"contents":{"twoColumnWatchNextResults":{"results":{"results":{"contents":[
+		{"videoPrimaryInfoRenderer":{"title":{"runs":[{"text":"Fake track"}]},%s}}
+	]}}}},"related":{"videoRenderer":{"title":{"runs":[{"text":"Related AI"}]},"badges":[
+		{"metadataBadgeRenderer":{"icon":{"iconType":"INFO"},"style":"BADGE_STYLE_TYPE_SIMPLE","label":"AI","accessibilityData":{"label":"AI: Content was made with AI"}}}
+	]}}}`, badges)
 }
 
 // episodeNextResponse is what YouTube answers for the episode ep-1 in the
@@ -268,6 +359,7 @@ func newTestApp(t testing.TB) *app {
 		return report.Info{App: version, OS: runtime.GOOS, Arch: runtime.GOARCH, YtDlp: "2026.01.01", FFmpeg: "7.1"}
 	}
 	a.lyricsSource = func(context.Context, lrclib.Query) (*lrclib.Lyrics, error) { return nil, nil }
+	a.betterLyrics = func(context.Context, betterlyrics.Query) ([]lyrics.Line, error) { return nil, nil }
 	a.account.newClient = newFakeClient
 	a.account.public = newFakeClient(nil)
 	return a
@@ -374,6 +466,97 @@ func albumPage() string {
 ]}}}`
 }
 
+// aiAlbumPage is an album for checking the AI filter: one labelled song before
+// one that must play.
+const aiAlbumPage = `{"header":{"musicResponsiveHeaderRenderer":{"title":{"runs":[{"text":"Generated and Human"}]}}},
+"contents":{"musicShelfRenderer":{"contents":[
+	{"musicResponsiveListItemRenderer":{
+		"playlistItemData":{"videoId":"ai-track"},
+		"flexColumns":[
+			{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"AI Track"}]}}},
+			{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Generated Artist"},{"text":" • "},{"text":"3:00"}]}}}
+		]
+	}},
+	{"musicResponsiveListItemRenderer":{
+		"playlistItemData":{"videoId":"human-track"},
+		"flexColumns":[
+			{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Human Track"}]}}},
+			{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Human Artist"},{"text":" • "},{"text":"3:00"}]}}}
+		]
+	}}
+]}}}`
+
+// aiRunAlbumPage has more labelled songs than the playback failure limit,
+// followed by one song that must still play.
+func aiRunAlbumPage() string {
+	var items []string
+	for _, id := range []string{"ai-one", "ai-two", "ai-three", "ai-four", "human"} {
+		items = append(items, fmt.Sprintf(`{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":%q},"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":%q}]}}}]}}`, id, id))
+	}
+	return `{"contents":{"musicShelfRenderer":{"contents":[` + strings.Join(items, ",") + `]}}}`
+}
+
+// aiQueueMusic supplies batches of fresh AI recommendations, with an optional
+// allowed song at the end of one batch. An empty fourth batch keeps a broken
+// exclusion loop from hanging the test.
+type aiQueueMusic struct {
+	batches    int
+	humanBatch int
+}
+
+func (s *aiQueueMusic) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.Header.Get("X-YouTube-Client-Name") != "67" || !strings.HasSuffix(request.URL.Path, "/next") {
+		return fakeMusic{}.RoundTrip(request)
+	}
+	s.batches++
+	var items []string
+	if s.batches < 4 {
+		for i := 1; i <= 4; i++ {
+			id := fmt.Sprintf("rec-%d-%d", s.batches, i)
+			if s.batches != s.humanBatch || i != 4 {
+				markFakeAI(id)
+			}
+			items = append(items, fmt.Sprintf(`{"playlistPanelVideoRenderer":{"videoId":%q,"title":{"runs":[{"text":%q}]}}}`, id, id))
+		}
+	}
+	response := `{"contents":{"playlistPanelRenderer":{"contents":[` + strings.Join(items, ",") + `]}}}`
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response)), Request: request}, nil
+}
+
+// nestedAlbumResponse follows the current album layout: the page header is in
+// the primary tab, with a separate artist portrait; tracks are in the second column.
+const nestedAlbumResponse = `{"contents":{"twoColumnBrowseResultsRenderer":{
+"tabs":[{"tabRenderer":{"content":{"sectionListRenderer":{"contents":[
+{"musicResponsiveHeaderRenderer":{
+"title":{"runs":[{"text":"After Hours"}]},
+"straplineThumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"https://img.test/artist.png"}]}}},
+"thumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"https://img.test/album-small.png"},{"url":"https://img.test/album.png"}]}}}
+}}
+]}}}}],
+"secondaryContents":{"sectionListRenderer":{"contents":[{"musicShelfRenderer":{"contents":[
+{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":"nested-track"},"flexColumns":[
+{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Album Track One"}]}}}
+]}}
+]}}]}}
+}}}`
+
+// metadataPlaylistResponse includes individually linked artists and a separate
+// album column, as well as a track whose credits have no browse endpoints.
+const metadataPlaylistResponse = `{"header":{"musicResponsiveHeaderRenderer":{"title":{"runs":[{"text":"Linked credits"}]}}},
+"contents":{"musicShelfRenderer":{"contents":[
+{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":"linked-track"},"flexColumns":[
+{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Linked Track"}]}}},
+{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Song • "},
+{"text":"Aurora Vale","navigationEndpoint":{"browseEndpoint":{"browseId":"UCartist"}}},{"text":" & "},
+{"text":"Guest Artist","navigationEndpoint":{"browseEndpoint":{"browseId":"UCguest"}}},{"text":" • 496M plays"}]}}},
+{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Deep Focus","navigationEndpoint":{"browseEndpoint":{"browseId":"MPREb_test"}}}]}}}
+],"lengthText":{"simpleText":"0:30"}}},
+{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":"unlinked-track"},"flexColumns":[
+{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Unlinked Track"}]}}},
+{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Unknown artist • Unknown album"}]}}}
+],"lengthText":{"simpleText":"0:30"}}}
+]}}}`
+
 // podcastResponse is a podcast show: its heading among its contents, and a
 // shelf of two episodes, newest first.
 const podcastResponse = `{"contents":{"twoColumnBrowseResultsRenderer":{
@@ -411,9 +594,34 @@ func playlistPage() string {
 ]}}}`
 }
 
+// growingPlaylistResponse is a playlist page of one song, which gains a second
+// one when fakePlaylistGrows is set, as a playlist the user added to elsewhere
+// does.
+func growingPlaylistResponse() string {
+	second := ""
+	if fakePlaylistGrows.Load() {
+		second = `,
+	{"musicResponsiveListItemRenderer": {
+		"playlistItemData": {"videoId": "grow-two"},
+		"flexColumns": [
+			{"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{"text": "Growing Track Two"}]}}}
+		]
+	}}`
+	}
+	return `{"header":{"musicResponsiveHeaderRenderer":{"title":{"runs":[{"text":"Growing Playlist"}]}}},
+	"contents":{"playlistVideoListRenderer":{"contents":[
+	{"musicResponsiveListItemRenderer": {
+		"playlistItemData": {"videoId": "grow-one"},
+		"flexColumns": [
+			{"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{"text": "Growing Track One"}]}}}
+		]
+	}}` + second + `
+	]}}}`
+}
+
 // playlistSongsResponse is a playlist page of three songs, each with an artist
 // beside it, for searching the page.
-const playlistSongsResponse = `{"contents":{"playlistVideoListRenderer":{"contents":[
+const playlistSongsResponse = `{"header":{"musicResponsiveHeaderRenderer":{"title":{"runs":[{"text":"Ameiro Playlist"}]},"subtitle":{"runs":[{"text":"Playlist"},{"text":" • "},{"text":"Nova"},{"text":" • "},{"text":"3 songs"}]},"thumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"https://img.test/ameiro.png"}]}}}}},"contents":{"playlistVideoListRenderer":{"contents":[
 	{"musicResponsiveListItemRenderer":{
 		"playlistItemData":{"videoId":"song-one"},
 		"flexColumns":[
@@ -458,9 +666,13 @@ func resetFakes() {
 	playlistDeletes.Store(0)
 	subscribeWrites.Store(0)
 	homeMoreRequests.Store(0)
+	homeLoads.Store(0)
+	aiChecks.Store(0)
 	refuseWrites.Store(false)
 	duplicateWrites.Store(false)
+	hypeSongAdded.Store(false)
 	fakeLikeState.Store("")
+	fakeAI.Clear()
 	fakeLibrary.Clear()
 	fakeLibrary.Store("PLhype", true)
 	fakeLibrary.Store("PLcar", true)
@@ -696,23 +908,64 @@ const suggestionsResponse = `{"contents":[
 	]}}
 ]}`
 
-const recapResponse = `{"contents":{"musicCarouselShelfRenderer":{
-	"header":{"musicCarouselShelfBasicHeaderRenderer":{"title":{"runs":[{"text":"Your recap"}]}}},
-	"contents":[
-		{"musicTwoRowItemRenderer":{
-			"title":{"runs":[{"text":"Top song of the year"}]},
-			"subtitle":{"runs":[{"text":"Someone"}]},
-			"navigationEndpoint":{"watchEndpoint":{"videoId":"vid-9"}}
-		}}
-	]
-}}}`
-
 const accountsResponse = `{"accountSectionListRenderer":{"contents":[{"accountItemSectionRenderer":{"contents":[
 	{"accountItemRenderer":{"accountName":{"simpleText":"Main channel"},"isSelected":true,"hasChannel":true}},
 	{"accountItemRenderer":{"accountName":{"simpleText":"Brand channel"},"hasChannel":true,"serviceEndpoint":{"selectActiveIdentityEndpoint":{"supportedTokens":[{"pageIdToken":{"pageId":"UC-brand"}}]}}}},
 	{"accountItemRenderer":{"accountName":{"simpleText":"Music channel"},"hasChannel":true,"serviceEndpoint":{"selectActiveIdentityEndpoint":{"supportedTokens":[{"pageIdToken":{"pageId":"UC-music"}}]}}}},
 	{"accountItemRenderer":{"accountName":{"simpleText":"Studio channel"},"hasChannel":true,"serviceEndpoint":{"selectActiveIdentityEndpoint":{"supportedTokens":[{"pageIdToken":{"pageId":"UC-studio"}}]}}}}
 ]}}]}}`
+
+// multiAccountMusic distinguishes Google accounts that share the same cookies.
+// Both primary channels have empty channel IDs: only X-Goog-Authuser separates them.
+type multiAccountMusic struct {
+	fresh             string
+	swapped           bool
+	omitEmail         bool
+	omitSwitcherEmail bool
+	index             string
+	pageID            string
+}
+
+func (m *multiAccountMusic) RoundTrip(request *http.Request) (*http.Response, error) {
+	var reply string
+	switch {
+	case strings.HasSuffix(request.URL.Path, "/account/accounts_list"), strings.HasSuffix(request.URL.Path, "/getAccountSwitcherEndpoint"):
+		reply = multiAccountsResponse
+		if m.swapped {
+			reply = strings.NewReplacer("personal@example.test", "music@example.test", "music@example.test", "personal@example.test").Replace(reply)
+		}
+		if m.omitSwitcherEmail {
+			reply = strings.NewReplacer("personal@example.test", "", "music@example.test", "").Replace(reply)
+		}
+	case strings.HasSuffix(request.URL.Path, "/account/account_menu"):
+		m.index, m.pageID = request.Header.Get("X-Goog-Authuser"), request.Header.Get("X-Goog-PageId")
+		reply = signedOutAccountMenu
+		if strings.Contains(request.Header.Get("Cookie"), m.fresh) {
+			name, email := "Personal account", "personal@example.test"
+			if m.index == "1" && !m.swapped {
+				name, email = "Music account", "music@example.test"
+			}
+			if m.pageID == "UC-music-brand" {
+				name = "Music brand"
+			}
+			if m.omitEmail {
+				email = ""
+			}
+			reply = fmt.Sprintf(`{"activeAccountHeaderRenderer":{"accountName":{"simpleText":%q},"email":{"simpleText":%q}}}`, name, email)
+		}
+	default:
+		return fakeMusic{}.RoundTrip(request)
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(reply)), Request: request}, nil
+}
+
+const multiAccountsResponse = `{"sections":[{"accountSectionListRenderer":{"header":{"googleAccountHeaderRenderer":{"email":{"simpleText":"personal@example.test"}}},"contents":[{"accountItemSectionRenderer":{"contents":[
+	{"accountItemRenderer":{"accountName":{"simpleText":"Personal account"},"accountByline":{"simpleText":"personal@example.test"},"isSelected":true,"serviceEndpoint":{"selectActiveIdentityEndpoint":{"supportedTokens":[{"accountSigninToken":{"signinUrl":"https://www.youtube.com/signin?authuser=0"}}]}}}},
+	{"compactLinkRenderer":{"title":{"simpleText":"View all channels"}}}
+]}}]}},{"accountSectionListRenderer":{"header":{"googleAccountHeaderRenderer":{"email":{"simpleText":"music@example.test"}}},"contents":[{"accountItemSectionRenderer":{"contents":[
+	{"accountItemRenderer":{"accountName":{"simpleText":"Music account"},"accountByline":{"simpleText":"music@example.test"},"isSelected":true,"serviceEndpoint":{"selectActiveIdentityEndpoint":{"supportedTokens":[{"accountSigninToken":{"signinUrl":"https://www.youtube.com/signin?authuser=1"}}]}}}},
+	{"accountItemRenderer":{"accountName":{"simpleText":"Music brand"},"channelHandle":{"simpleText":"@music-brand"},"serviceEndpoint":{"selectActiveIdentityEndpoint":{"supportedTokens":[{"accountSigninToken":{"signinUrl":"/signin?authuser=1"}},{"pageIdToken":{"pageId":"UC-music-brand"}}]}}}}
+]}}]}}]}`
 
 // refusingMusic answers the account menu the way YouTube answers for a session
 // it has stopped accepting, until it is asked with the cookie the browser
@@ -852,4 +1105,33 @@ func (m *memoryStore) Delete(context.Context) error {
 // lastFMSession is where a test app keeps its Last.fm session key.
 func lastFMSession(dir string) secretfile.File {
 	return secretfile.File{Path: filepath.Join(dir, "session"), Keychain: secretfile.NoKeychain{}, Name: "lastfm-session"}
+}
+
+func paginatedPlaylistResponse(start, end int, next, suggestions string) string {
+	var items []string
+	for i := start; i < end; i++ {
+		items = append(items, fmt.Sprintf(`{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":"track-%d"},"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Track %d"}]}}}]}}`, i, i))
+	}
+	kind := "musicPlaylistShelfRenderer"
+	if start > 0 {
+		kind = "musicPlaylistShelfContinuation"
+	}
+	return fmt.Sprintf(`{"contents":{"%s":{"contents":[%s],"continuations":[{"nextContinuationData":{"continuation":%q}}]}},"continuations":[{"nextContinuationData":{"continuation":%q}}]}`, kind, strings.Join(items, ","), next, suggestions)
+}
+
+// appendedPlaylistResponse is a playlist page in the shape YouTube answers
+// today: the songs of the first page sit in a shelf, and each later page is an
+// onResponseReceivedActions list that ends with a continuationItemRenderer.
+func appendedPlaylistResponse(start, end int, next string) string {
+	var items []string
+	for i := start; i < end; i++ {
+		items = append(items, fmt.Sprintf(`{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":"track-%d"},"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Track %d"}]}}}]}}`, i, i))
+	}
+	if next != "" {
+		items = append(items, fmt.Sprintf(`{"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":%q,"request":"CONTINUATION_REQUEST_TYPE_BROWSE"}}}}`, next))
+	}
+	if start == 0 {
+		return fmt.Sprintf(`{"contents":{"twoColumnBrowseResultsRenderer":{"secondaryContents":{"sectionListRenderer":{"contents":[{"musicPlaylistShelfRenderer":{"contents":[%s]}}]}}}}}`, strings.Join(items, ","))
+	}
+	return fmt.Sprintf(`{"onResponseReceivedActions":[{"appendContinuationItemsAction":{"continuationItems":[%s]}}]}`, strings.Join(items, ","))
 }

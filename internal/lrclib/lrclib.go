@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/elianiva/meiro/internal/lyrics"
 )
 
 // userAgent names the app, as LRCLIB asks of its clients.
@@ -34,17 +36,11 @@ type Query struct {
 	Duration             time.Duration
 }
 
-// Line is one sung line and when it starts.
-type Line struct {
-	At   time.Duration
-	Text string
-}
-
 // Lyrics is what LRCLIB knows of a track. Plain or Synced can be empty; a
 // track that is only music has neither, and Instrumental set.
 type Lyrics struct {
 	Plain        string
-	Synced       []Line
+	Synced       []lyrics.Line
 	Instrumental bool
 }
 
@@ -228,9 +224,9 @@ const restart = 10 * time.Second
 // file is split where its time jumps back, and the copy with the most
 // non-ASCII text, which is the original for a song in Japanese or Korean, is
 // kept; with no difference between them, the first.
-func ParseLRC(text string) []Line {
-	var blocks [][]Line
-	var current []Line
+func ParseLRC(text string) []lyrics.Line {
+	var blocks [][]lyrics.Line
+	var current []lyrics.Line
 	var previous time.Duration
 	for raw := range strings.SplitSeq(text, "\n") {
 		raw = strings.TrimSpace(raw)
@@ -257,13 +253,13 @@ func ParseLRC(text string) []Line {
 		previous = first
 		content := strings.TrimSpace(raw)
 		for _, at := range stamps {
-			current = append(current, Line{At: at, Text: content})
+			current = append(current, lyrics.Line{At: at, Text: content})
 		}
 	}
 	if len(current) > 0 {
 		blocks = append(blocks, current)
 	}
-	var best []Line
+	var best []lyrics.Line
 	bestScore := -1
 	for _, block := range blocks {
 		score := 0
@@ -297,10 +293,4 @@ func parseStamp(s string) (time.Duration, bool) {
 		return 0, false
 	}
 	return time.Duration(m)*time.Minute + time.Duration(secs*float64(time.Second)), true
-}
-
-// IndexAt is the line being sung at position: the last one that has started.
-// It is -1 before the first line.
-func IndexAt(lines []Line, position time.Duration) int {
-	return sort.Search(len(lines), func(i int) bool { return lines[i].At > position }) - 1
 }

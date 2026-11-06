@@ -12,11 +12,13 @@ import (
 
 	"github.com/elianiva/meiro/internal/artwork"
 	"github.com/elianiva/meiro/internal/audio"
+	"github.com/elianiva/meiro/internal/betterlyrics"
 	"github.com/elianiva/meiro/internal/cookies"
 	"github.com/elianiva/meiro/internal/discordrpc"
 	"github.com/elianiva/meiro/internal/history"
 	"github.com/elianiva/meiro/internal/lrclib"
 	"github.com/elianiva/meiro/internal/lru"
+	"github.com/elianiva/meiro/internal/lyrics"
 	"github.com/elianiva/meiro/internal/proc"
 	"github.com/elianiva/meiro/internal/report"
 	"github.com/elianiva/meiro/internal/settings"
@@ -60,6 +62,15 @@ type app struct {
 	// What the user chose, and the writer that keeps it.
 	settings settings.Settings
 	saver    settings.Writer
+	// settingsSeen is the last settings.json content the watcher read, so it
+	// notices only a change it has not handled. watchSettings starts it, and
+	// then only the watcher's goroutine touches it.
+	settingsSeen []byte
+	// colors are the theme colours another program wrote to colors.json, or
+	// nil. colorsSeen is the content they came from, kept like settingsSeen.
+	colors     *m3.Colors
+	colorsPath string
+	colorsSeen []byte
 	// playSave keeps the queue and position for the next run.
 	playSave playbackSave
 
@@ -95,7 +106,12 @@ type app struct {
 	carousels   *lru.Cache[string, *m3.CarouselState]
 	list        *ui.ListState
 	listWidth   float32 // width the page's list had in the last frame
-	search      searchState
+	// detailCompact is whether a detail page's hero has scrolled out of
+	// view, so the top bar carries its artwork, name and actions instead.
+	detailCompact bool
+	// pull is the pull-to-refresh gesture of the page shown.
+	pull   pullState
+	search searchState
 	// searchField and detailSearchField move the keyboard to the top bar's
 	// search and to the playlist page's, where Focus waits while one is hidden.
 	searchField, detailSearchField ui.Handle
@@ -129,7 +145,9 @@ type app struct {
 	requests songRequests
 
 	playback
+	aiFilter   aiFilterState
 	nowPlaying nowPlayingState
+	notch      notchState
 
 	// The local listening history and the stats page built from it.
 	historyPath    string
@@ -145,6 +163,9 @@ type app struct {
 	historyWriter       history.Writer
 	statsRange          int // days the stats page covers: 7, 14 or 30
 	stats               statsMemo
+
+	// downloads is the music saved to play offline.
+	downloads downloads
 
 	// audioCache is the cache playback uses now; the settings page swaps it
 	// from the main thread while background work holds on to the one it
@@ -173,6 +194,9 @@ type app struct {
 	// settings.
 	eqDebounce task
 
+	// betterLyrics finds a track's lyrics on Better Lyrics, which times each
+	// word; tests replace it.
+	betterLyrics func(ctx context.Context, q betterlyrics.Query) ([]lyrics.Line, error)
 	// lyricsSource finds a track's lyrics on LRCLIB; tests replace it.
 	lyricsSource lyricsSource
 	// collectInfo reads the versions of the helper programs, which runs
@@ -193,7 +217,7 @@ func newApp() *app {
 		openURL:    mygo.Shell.OpenExternal,
 		bundled:    proc.Bundled,
 		nowPlaying: nowPlayingState{queueSelectionAnchor: -1, queueSelectionCursor: -1},
-		page:       &pageData{},
+		page:       &pageData{scroll: &ui.ScrollState{}},
 		list:       &ui.ListState{},
 		pages:      lru.New[string, *pageData](pageCacheLimit),
 		details:    lru.New[string, detail](pageCacheLimit),
@@ -206,6 +230,7 @@ func newApp() *app {
 	}
 	a.scrobble = newScrobbler()
 	a.playback = newPlayback(audio.NewURLs(resolveAudio(youtube.NewClient(youtube.Options{}))), a.settings.Volume)
+	a.aiFilter = newAIFilter()
 	a.cacheSongsText = strconv.Itoa(a.settings.CacheSongs)
 	a.run = func(work func()) {
 		go func() {
@@ -219,6 +244,7 @@ func newApp() *app {
 		return youtube.NewClient(youtube.Options{CookieAuth: auth})
 	}, cookies.Sources)
 	a.thumbs = artwork.New(&http.Client{Timeout: 30 * time.Second}, a.refresh)
+	a.betterLyrics = new(betterlyrics.Client).Get
 	a.lyricsSource = new(lrclib.Client).Get
 	a.collectInfo = report.Collect
 	return a

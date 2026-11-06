@@ -169,19 +169,58 @@ func TestTakingAPlaylistOutOfTheLibraryFromItsCard(t *testing.T) {
 	}
 }
 
-// A control that looks small still takes a press 48 DIPs wide and high.
-func TestSmallControlsHaveAFullSizeTarget(t *testing.T) {
-	a := newTestApp(t)
-	a.router.Push("/home")
-	a.router.Push("/album/MPREb_test")
-	tt := ui.NewTester(a.view, 1000, 700)
-	tt.Frame()
-	back, ok := tt.Find("Back")
-	if !ok || back.W < 48 || back.H < 48 {
-		t.Fatalf("the back button is %+v, want at least 48x48", back)
-	}
-	tt.ClickAt(back.X+back.W/2+20, back.Y+back.H/2+20)
-	if p := a.router.Path(); p != "/home" {
-		t.Errorf("a press beside the button's drawn shape went to %q, want /home", p)
+func TestAddingASongRefreshesThePlaylist(t *testing.T) {
+	for _, scenario := range []string{"open", "cached", "refused", "duplicate"} {
+		t.Run(scenario, func(t *testing.T) {
+			resetFakes()
+			t.Cleanup(resetFakes)
+			a := signedInApp(t)
+			a.router.Push("/playlist/VLPLhype")
+			tt := ui.NewTester(a.view, 1000, 850)
+			tt.Frame()
+			if len(a.page.playable) != 0 {
+				t.Fatal("the playlist should start empty")
+			}
+			if scenario == "cached" {
+				a.router.Push("/playlist/VLPL_songs")
+				tt.Frame()
+			}
+			refuseWrites.Store(scenario == "refused")
+			duplicateWrites.Store(scenario == "duplicate")
+			card, ok := tt.Find("Suggestion One")
+			if !ok {
+				t.Fatalf("no suggested song: %q", tt.Texts())
+			}
+			tt.Move(card.X+card.W/2, card.Y+card.H/2)
+			tt.Frame()
+			for _, label := range []string{"More options for Suggestion One", "Add to playlist", "Add to Hype"} {
+				if err := tt.Click(label); err != nil {
+					t.Fatal(err)
+				}
+				tt.Frame()
+			}
+			write := written()
+			if !strings.HasSuffix(write.endpoint, "/browse/edit_playlist") || write.body["playlistId"] != "PLhype" {
+				t.Fatalf("write = %#v", write)
+			}
+			if scenario == "cached" {
+				if len(a.page.playable) != 3 {
+					t.Fatal("adding to Hype changed the other playlist")
+				}
+				a.router.Push("/playlist/VLPLhype")
+				tt.Frame()
+			}
+			if scenario == "refused" || scenario == "duplicate" {
+				if hypeSongAdded.Load() || len(a.page.playable) != 0 {
+					t.Fatal("an unsuccessful add changed the playlist")
+				}
+				return
+			}
+			if !hypeSongAdded.Load() || len(a.page.playable) != 1 || a.page.playable[0].VideoID != "suggestion-one" {
+				t.Fatalf("the added song is missing from the playlist: %+v", a.page.playable)
+			}
+		})
 	}
 }
+
+// A control that looks small still takes a press 48 DIPs wide and high.

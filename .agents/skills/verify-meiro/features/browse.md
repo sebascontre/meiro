@@ -7,6 +7,8 @@ A user opens the pages in the rail, follows an item into an album, playlist or a
 - `browse-pages` draws every route with its seeded content.
 - `browse-open` follows an item from Home into its page.
 - `browse-back` restores the scroll position of the page left.
+- `browse-pull-refresh` loads a page again by pulling it down from its top.
+- `browse-album-cover` loads an album's own artwork when its header is nested in the primary tab, including navigation from the player's album credit.
 - `browse-new-route` covers a page added to `routes` in `routes.go`.
 
 ## How to get to it (user POV)
@@ -27,10 +29,15 @@ Preconditions:
 - **Open an item.** From `/home`, `p.click("Deep Focus", "album")`. `a.router.Path()` starts with `/album/` and `Album Track One` shows.
 - **Show more.** On Home, click `Show more`. The next sections appear below the existing feed, and the request count increases once.
 - **Go back.** Verified for album: click `Deep Focus` on `/home`, then `a.router.Back()` and `p.step("back")`. `Quick picks` shows again. For scroll position, mirror `TestGoingBackRestoresWhereAPageWasScrolled`, which uses `/settings`, `tt.Scroll(500, 300, 0, 1500)` and `a.list.Visible()`.
+- **Pull to refresh.** From `/home` at the top, `tt.Scroll(500, 300, 0, -pullRefresh/2)` shows the ring labelled `Pull to refresh` and asks YouTube for nothing; `tt.Advance(pullSettle)` takes the ring away. `tt.Scroll(500, 300, 0, -pullRefresh)` asks for the home feed once — `homeLoads` in `harness_test.go` counts it. The ring and the count are the proof; the page in between shows its loading row only for the microsecond the inline runner takes. Controls: a window shorter than the page (`ui.NewTester(a.view, 1000, 300)`) scrolled down and then back up scrolls to its top without loading, and `/album/MPREb_test` never pulls, because only pages that load their own content do. See `TestPullFromTheTopLoadsThePageAgain`, `TestScrollingBackToTheTopDoesNotLoadThePage` and `TestPullLeavesAPageThatLoadsNothing`.
+- **Shift+scroll is not a pull.** Shift turns the wheel sideways in the runtime, so `pullScroll` passes it on and the shelf scrolls. `TestShiftScrollDoesNotPullThePage` calls the handler with `Mods: ui.Shift` (the tester's scroll sends no modifiers) and checks that it neither pulls nor loads, while the same scroll without Shift still loads once.
 - **New route.** Add the route's path to the table in `TestEveryPageLoadsAndDraws` style, push it, and show its heading in the screenshot.
+- **Album cover from a credit.** Use `tonesApp(t, 600)`, return `r.file` from `r.url`, and supply `redArt` through `a.thumbs` (close both caches). Open `/playlist/VLPL_album_cover`, click `Linked Track`, then `Go to album: After Hours` from either the bar or Now Playing. The route is `/album/MPREb_nested`, the page shows `Album Track One`, and its artwork is `https://img.test/album.png`. Wait for the center of `More options for After Hours` to turn red; do not prefetch the artwork in the test. See `TestAlbumCoverLoadsFromPlayerMetadata`. As a control, open `Deep Focus` from Home: its legacy header still loads.
 
 ## Gotchas
 
 - `/library` and `/recap` need `signedInApp(t)`. Signed out they show a sign-in prompt, which is also worth a screenshot.
 - Compare the heading, not the path. A route that failed to match draws the `Not found` page at a valid-looking path.
 - `a.router.Push` is the test's shortcut for navigation. Also click one real entry point per proof.
+- A page opened by a click rises in. Capture it after `tt.Advance(2*time.Second)`, not on the click's own frame: there the screenshot shows the new top bar over an empty body, while `p.shows` already passes because the page's texts are in the tree.
+- Current album responses put `musicResponsiveHeaderRenderer` in the primary tab's section list. Its `thumbnail` is the album cover; `straplineThumbnail` is an artist portrait. Never fill missing page art from tracks or related albums.

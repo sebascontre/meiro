@@ -21,10 +21,120 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Radio narration handles Japanese title suffixes.** When a Japanese title is followed by a dash and Latin text, the spoken title uses only the Japanese portion.
 - **Tracks can crossfade.** A new Playback section in Settings fades the end of a song out while the next one fades in. Choose 1 to 12 seconds, and turn it off to go back to gapless playback.
 
+## [0.6.1] - 2026-11-05
+
+### Added
+
+- **Windows shows what Meiro plays.** The media controls in the volume flyout and on the lock screen, and status bars that read them, show the song's title, artist, album and cover, with its progress. Their play, pause, next, previous and seek controls drive Meiro. The taskbar buttons and the media keys work as before.
+
+### Changed
+
+- **The shelves' cards breathe.** The artwork now runs to the card's edges, the title and subtitle keep the card's 16 DIP gutter instead of 8, and the cards are 160 DIP wide with 16 DIP between them rather than 176 and 4. The play button takes a corner closer to the card's, so it no longer looks wedged into the artwork's curve.
+
 ### Fixed
+
+- **The progress handle keeps one width.** On a desktop whose scale is not a whole number, the bar that marks the position in a track rounded to one of two widths as it moved, so it looked to flicker wide and thin. Its edges now land on whole device pixels.
+- **Adding to the queue keeps the song after the one playing.** When Auto-play had already moved into recommendations, an added song went back to the original queue behind the track playing, so it never played. It now joins the queue after the current track, and recommendations that have played fold into the queue above the Recommended heading as YouTube Music does.
+- **A large playlist loads every song.** YouTube returns the songs after a playlist's first page in a shape Meiro did not follow, so a playlist of several hundred songs stopped after its first pages. The page now follows every page to the end, with a spinner under the songs while the next page arrives.
+- **Track notifications stay away while you use Meiro.** A new track no longer shows a notification while the main window or the mini player is in front, and the previous track's notification goes away. Notifications still appear while you are in another app.
+- **Downloaded playlists pick up songs added later.** Reopening a downloaded playlist fetches the songs added since it was downloaded, and the Download button counts them until they are saved.
+- **Shift+scroll over a shelf scrolls it sideways.** It used to pull the page down to refresh when the page was at its top.
+
+## [0.6.0] - 2026-11-03
+
+### Added
+
+- **Pull a page down to load it again.** Swiping down from the top of Home, Explore or Library loads the page again, as the refresh shortcut does. A ring fills as you pull, and the page loads again when the ring is full. A page scrolled away from its top scrolls back to it instead.
+- **Meiro installs with Homebrew on macOS.** `brew install --cask elianiva/tap/meiro` installs the universal build and follows the newest release. The cask clears the download flag that made Gatekeeper refuse the app on the first launch.
+
+### Changed
+
+- **The lyrics read as lyrics.** The line being sung takes the theme's accent colour, the other lines fade with their distance from it, and both ends of the list dissolve into the card instead of being cut by it. The words of a song read at a comfortable width instead of across the whole tab.
+- **The Lyrics tab's header is quieter.** A switch turns the timed lines on and off where the Synced and Static chips used to be, and a question mark at the other end of the row explains where the lyrics came from instead of naming the service in the line.
+- **A playlist stays recognizable while you scroll.** Once the hero scrolls out of view, the top bar carries the cover, name and the Play, Shuffle and Download actions beside Back, while the global search stays exactly where it is. The cover, name and actions fade in one after another, and scrolling back to the top reverses the stagger and restores the full hero.
+- **The search field takes the page's colour.** The top-bar search and the Settings search now use a light tonal fill instead of neutral grey, so they stand out against the header wash while still following the theme.
+- **The songs toolbar stays on screen.** Scrolling a playlist past its Songs row used to take the search, Sort and the direction with it. That row now keeps its place at the top of the list while the songs and the sections below scroll under it.
+- **Playlist search sits with Sort above the songs.** The search that narrows a playlist now lives in the toolbar with the sort controls instead of beside Play and Shuffle in the hero. It opens as a simple line under the field rather than a filled pill, and still keeps the page filtered to the songs that match. The sort controls beside it are bare buttons too, with no outlined pill around the field or the direction.
+- **Shelves no longer draw a scroll bar.** The arrows beside a shelf's title page it, and the wheel and the touchpad still move it sideways. The row of cards ends closer to the section below.
+- **The close prompt shows which of its buttons quits.** "Close Meiro" reads as a destructive action on macOS and Linux, and Escape keeps Meiro running on macOS, where it did nothing before.
+
+### Fixed
+
+- **Signing in with Edge on Windows finishes.** The sign-in window stays connected until Meiro reads the session, then closes and removes its temporary profile.
+- **Timed lyrics open on the line being sung.** Opening the Lyrics tab during a song left the current line below the middle of the list. It now lands in the middle when the tab opens, as it does when the song moves on.
+- **A channel the account menu cannot switch to says why.** A row YouTube lists without the channel it stands for used to close the menu and leave you where you were. It now says that YouTube did not name the channel.
+- **The theme follows the album art again.** Meiro takes the colour from the cover the player shows, so the theme changes with each song at any display scaling instead of keeping the last colour.
+- **Playing a large playlist before it finishes loading keeps every song.** Playback starts from the first page, and remaining songs join the queue before Auto-play recommendations, mixed into the upcoming songs when shuffle is on. If loading the rest fails, the available songs still play and Auto-play can continue.
+- **Auto-play continues after a playlist ends.** When its queue runs out, recommendations start from the final song instead of reopening the original playlist.
+
+## [0.5.2] - 2026-11-01
+
+### Added
+
+- **Choose your YouTube account when importing from a browser.** Meiro shows the Google accounts and channels in your browser session instead of signing in with the first account. Your choice is remembered across restarts and session refreshes, even when YouTube Music omits your email from its account details. Import errors distinguish rejected sessions, missing account details, and an account that does not match your selection.
+- **Meiro can skip AI-generated songs.** Turn on Skip AI-generated songs under Settings → Playback. Meiro checks YouTube's AI label before a track starts and skips labelled songs in queues and auto-play. Unlabelled AI music may still play.
+- **Word-synced lyrics from Better Lyrics.** Meiro asks Better Lyrics before YouTube Music and LRCLIB, and lights each word of a line as the singer reaches it, so a line fills in as it is sung. The Lyrics tab names the source it used.
+
+### Changed
+
+- **Playback speed sits in the player's overflow menu.** The speed is no longer a button of its own in the player bar, Now Playing or the tray mini player. The overflow (⋮) button opens a menu that shows the speed in force, and its Playback speed row opens the speeds from 0.5× to 3×. The bar has more room and the mini player's volume slider is longer.
+
+### Fixed
+
+- **Songs added to a playlist appear without restarting Meiro.** Adding a song refreshes an open destination playlist and clears stale cached pages before you revisit it.
+
+## [0.5.1] - 2026-10-31
+
+### Added
+
+- **Dislike songs.** Use the player or a song's menu to dislike it, and optionally skip songs known to be disliked in Settings → Playback.
+- **Meiro can use matugen's full colour set.** Matugen writes light and dark colours to `colors.json` in Meiro's data folder, and Meiro matches the rest of your desktop exactly without touching `settings.json`. Choose Matugen as the colour source in Settings → Appearance; the README has the template and setup. ([#249](https://github.com/elianiva/meiro/issues/249))
+- **Media keys on Windows.** Play, pause, next track, previous track and stop keys control playback from the keyboard, even when Meiro is in the background.
+
+### Changed
+
+- **Colour source is one choice.** Settings → Appearance offers Fixed, Artwork and Matugen in place of the Colour from artwork switch. The colour and palette pickers show only when they apply.
+
+### Fixed
+
+- **The macOS menu bar player returns when the notch is off or unavailable.** Turn off Notch player in Settings > Desktop to use the menu bar icon and mini player. When no display with a notch is available, Meiro switches to the menu bar automatically and returns to the notch when that display comes back. Playback continues, your notch preference is kept, and track notifications stay off.
+- **Playback explains when auto-skip reaches only disliked songs.** The player now tells you why it stopped instead of ending silently.
+- **Windows track notifications show the song's cover.** They showed Meiro's tray icon instead of the song's artwork.
+
+### Removed
+
+- **The Recap page is gone.** The navigation rail no longer shows Recap, and `/recap` opens the page-not-found message.
+
+## [0.5.0] - 2026-10-30
+
+### Added
+
+- **The volume slider can follow a logarithmic curve.** Turn on Logarithmic volume under Settings → Sound for finer steps at low volumes. It is off by default. ([#245](https://github.com/elianiva/meiro/issues/245))
+- **The theme follows settings.json while Meiro runs.** Wallpaper tools such as matugen and pywal can write a new seed colour, and Meiro recolours without a restart. The file is read again a moment after it changes, and a half-written file waits for the next read.
+- **Tracks can crossfade.** A new Playback section in Settings fades the end of a song out while the next one fades in. Choose 1 to 12 seconds, and turn it off to go back to gapless playback.
+- **The notch closes automatically when you leave it.** Move the pointer away for two seconds to return to the compact player. Moving back cancels the countdown; dragging progress or keeping keyboard focus on a control holds the panel open.
+- **Open Now Playing from the notch cover.** Click the large artwork to bring Meiro forward on the current song and collapse the notch, preserving playback position and pause state.
+- **Follow artist and album names from the player.** In the main window's player bar and Now Playing, click a linked credit to open its page while music keeps playing. Each credited artist opens separately, and saved queues retain their links.
+- **Open Meiro from the notch.** The expanded panel has a small Open Meiro button beside collapse. It brings the main window forward and smoothly returns the notch to its compact size while playback continues.
+- **A notch player on macOS.** On a MacBook with a notch, the current cover and an animated playback indicator sit beside the camera. Click either side to open a compact, rounded panel with cover art, track information and synced lyrics side by side. Seek with its progress bar or use previous, play/pause and next without closing the panel. Turn it off in Settings > Desktop.
+
+### Changed
+
+- **Smoother notch transitions on macOS.** The panel expands and contracts with a short fade, reverses smoothly when clicked again, and uses a simple fade with Reduce Motion enabled.
+- **Quieter playback on macOS.** Track information stays in the notch, without notification banners or a Meiro menu bar icon. Keep Meiro running when its window closes and reopen it from the Dock.
+- **Songs, albums and playlists can be downloaded to play offline.** Choose Download in a song's menu, or on an album or playlist page. The new Downloads page lists what you saved, and it plays without a network. Downloaded songs show a check beside their length. ([#242](https://github.com/elianiva/meiro/issues/242))
+- **The sign-in window opens on the Google sign-in page.** It used to open the YouTube Music home page, and you had to find its Sign in button.
+
+### Fixed
+
+- **Large playlists load all their songs.** Songs beyond the first page no longer disappear when YouTube puts their next-page link on the song list.
 
 - **The window buttons on Windows show in the light theme.** The minimise, maximise and close buttons were white on a light window when Windows was dark; they now follow the theme you chose.
 - **The tray mini player on Windows has rounded corners.** Its corners no longer show a dark square behind the panel.
+- **Compact notch clicks respond reliably.** Clicking the cover or playback indicator opens the panel even when the mouse is held briefly or Meiro gains focus during the click.
+- **Reopen Meiro from the notch after closing its window.** On a notched Mac, the notch player keeps the main window available in the background by default. Open Meiro restores it and collapses the notch. Choosing to quit closes the notch as well, and explicit background preferences are respected.
+- **The macOS notch gives focus back to the menu bar.** The compact player no longer keeps keyboard focus, and clicking outside an expanded notch releases it without interrupting playback or the collapse animation.
+- **Album covers load when following a name from the player.** Albums using YouTube Music's newer page layout now show their own artwork instead of a music-note placeholder.
 
 ## [0.4.15] - 2026-10-28
 

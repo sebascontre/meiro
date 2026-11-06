@@ -68,15 +68,21 @@ type pageData struct {
 	loadedAt     time.Time
 	rows         []row
 	playable     []youtube.MusicItem
+	playlistMore string
 	// rowsDirty marks the rows stale. A change of the page's data sets it,
 	// and the next frame rebuilds them; otherwise they are reused. rowsKey
 	// is the shape they were built from, so a change a caller did not mark
 	// still rebuilds them.
 	rowsDirty bool
 	rowsKey   rowsKey
+	// downloads is the version of the downloads the Downloads page shows.
+	downloads int
 	// list is where the page is scrolled to, kept with it so that going back
 	// to a page shows it where it was left.
 	list *ui.ListState
+	// scroll is how far the list is scrolled, which the pull to refresh reads
+	// to tell a pull from a scroll back to the top.
+	scroll *ui.ScrollState
 }
 
 // fresh reports whether a kept page can be shown as it is.
@@ -132,10 +138,14 @@ func (a *app) onNavigate() {
 	// belongs to the visit, not the page. A page kept from before rebuilds
 	// its rows, since the search is part of the rows' key.
 	a.detailFilter, a.detailSearchOpen, a.detailSearchHadFocus, a.detailSort, a.detailSortOpen = "", false, false, playlistSort{}, false
+	a.detailCompact = false
 	a.closeSettingsSearch()
 	a.pageLoad.stop()
 	a.pageMore.stop()
 	a.nowPlaying.open, a.nowPlaying.closing = false, false
+	a.nowPlaying.navigateTo = nil
+	// A pull to refresh belongs to the visit of the page it pulls.
+	a.pull = pullState{}
 	location := a.router.Location()
 	r, id := a.route()
 	if r.open != nil {
@@ -161,7 +171,7 @@ func (a *app) onNavigate() {
 	// the accessibility tree built from the last frame.
 	a.list = &ui.ListState{}
 	a.list.ScrollTo(0, ui.Start)
-	a.page = &pageData{rowsDirty: true, list: a.list}
+	a.page = &pageData{rowsDirty: true, list: a.list, scroll: &ui.ScrollState{}}
 	a.pages.Delete(location)
 	if r.isDetail() {
 		a.page.detail, _ = a.details.Get(a.path())
@@ -218,6 +228,12 @@ func (a *app) loadPage(r *route, id string) {
 			feed.more, feed.moreErr = "", ""
 			return
 		}
+		// Offline, a downloaded album or playlist shows what was downloaded
+		// of it.
+		if downloaded, ok := a.offlinePage(id); ok && r.isDetail() && errors.Is(err, youtube.ErrUnreachable) {
+			a.applyPage(p, r, path, client, downloaded, false)
+			return
+		}
 		if err != nil {
 			p.rowsDirty = true
 			feed.loading, feed.partial = false, false
@@ -230,12 +246,17 @@ func (a *app) loadPage(r *route, id string) {
 			return
 		}
 		a.applyPage(p, r, path, client, result, false)
+		// A downloaded album or playlist picks up the songs it gained since,
+		// from the part of the page that has loaded; the rest adds its own
+		// when it arrives.
+		a.syncCollectionDownload(p, r, id)
 		// A playlist page shows its whole playlist and what YouTube suggests
 		// under it, so the page asks for both as it opens.
-		if r.id == routePlaylist && feed.more != "" {
-			token := feed.more
+		if r.id == routePlaylist {
+			token, suggestions := playlistContinuations(feed.sections, feed.more)
+			p.playlistMore = token
 			p.feed.more = ""
-			a.loadPlaylistRest(p, client, token)
+			a.loadPlaylistRest(p, r, id, client, token, suggestions)
 		}
 	})
 }
@@ -244,18 +265,26 @@ func (a *app) loadPage(r *route, id string) {
 // playlist that came after its first page join it, and the first answer that
 // is a shelf is what YouTube suggests under the playlist, which the page shows
 // after it, a few at a time.
-func (a *app) loadPlaylistRest(p *pageData, client *youtube.Client, token string) {
+func (a *app) loadPlaylistRest(p *pageData, r *route, id string, client *youtube.Client, token, suggestions string) {
 	if token == "" || a.pageSimilar.busy() {
 		return
 	}
 	startTask(a, &a.pageSimilar, moreTimeout, func(ctx context.Context) (moreItems, error) {
-		return readPlaylistRest(ctx, token, client.ContinueBrowse)
+		more, err := readPlaylistRest(ctx, token, client.ContinueBrowse)
+		if err != nil || len(more.sections) > 0 || suggestions == "" || suggestions == token {
+			return more, err
+		}
+		rest, err := readPlaylistRest(ctx, suggestions, client.ContinueBrowse)
+		more.items = append(more.items, rest.items...)
+		more.sections, more.next = rest.sections, rest.next
+		return more, err
 	}, func(more moreItems, err error) {
 		p.rowsDirty = true
 		if err != nil {
 			log.Printf("loading the rest of a playlist: %v", err)
 			return
 		}
+		p.playlistMore = ""
 		feed := &p.feed
 		if len(more.items) > 0 {
 			switch {
@@ -273,7 +302,19 @@ func (a *app) loadPlaylistRest(p *pageData, client *youtube.Client, token string
 			feed.similarMore = more.next
 			feed.similarShown = min(suggestionsShown, len(feed.similar))
 		}
+		a.syncCollectionDownload(p, r, id)
 	})
+}
+
+// playlistContinuations keeps the playlist's songs ahead of suggestions,
+// whether YouTube puts the next token on the song shelf or the page.
+func playlistContinuations(sections []youtube.MusicSection, pageToken string) (songs, suggestions string) {
+	for _, section := range sections {
+		if (section.Kind == "musicPlaylistShelfRenderer" || section.Kind == "playlistVideoListRenderer") && section.ContinuationToken != "" {
+			return section.ContinuationToken, pageToken
+		}
+	}
+	return pageToken, ""
 }
 
 // readPlaylistRest follows the playlist's continuation until YouTube returns

@@ -36,7 +36,9 @@ type nowPlayingState struct {
 	open bool
 	// closing is set while the player sinks away, before open is cleared.
 	closing bool
-	tab     panelTab
+	// navigateTo is a metadata destination waiting for the close animation.
+	navigateTo *youtube.BylinePart
+	tab        panelTab
 	// playerShown says the player has been built, so its rise starts on its
 	// first frame only.
 	playerShown bool
@@ -58,8 +60,11 @@ type nowPlayingState struct {
 	// miniOpen is whether the tray's mini player shows. Its side panel then
 	// loads what its tab shows, as the full-screen player's does.
 	miniOpen bool
-	// speedMenu is the key of the speed button whose menu is open, or empty.
-	speedMenu string
+	// speedMenu is the key of the overflow button whose speed menu is open,
+	// or empty, and speedChoices says that menu shows the speeds rather than
+	// the row that leads to them.
+	speedMenu    string
+	speedChoices bool
 }
 
 // relatedState is the related songs of the track playing.
@@ -85,6 +90,7 @@ type detailsState struct {
 
 // openPlayer opens the full-screen player on a tab.
 func (a *app) openPlayer(tab panelTab, queueOnly bool) {
+	a.nowPlaying.navigateTo = nil
 	a.nowPlaying.open, a.nowPlaying.closing = true, false
 	a.nowPlaying.tab, a.nowPlaying.queueOnly = tab, queueOnly
 	a.loadPanel()
@@ -101,6 +107,9 @@ func (a *app) setMiniShown(open bool) {
 // Opening the panel, choosing a tab and starting a track call it; building the
 // view never does.
 func (a *app) loadPanel() {
+	if a.notch.expanded {
+		a.loadLyrics()
+	}
 	if !a.nowPlaying.open && !a.nowPlaying.miniOpen {
 		return
 	}
@@ -200,6 +209,10 @@ func (a *app) nowPlayingView(c *ui.Context) {
 	// the player when its slide reaches the end.
 	if a.nowPlaying.closing && lift >= riseDistance-0.5 {
 		a.nowPlaying.open, a.nowPlaying.closing = false, false
+		if part := a.nowPlaying.navigateTo; part != nil {
+			a.nowPlaying.navigateTo = nil
+			a.openTarget(part.Target(), detail{title: part.Text})
+		}
 		return
 	}
 	panel.Children(func() {
@@ -234,8 +247,9 @@ func (a *app) nowPlayingView(c *ui.Context) {
 func (a *app) nowPlayingMain(c *ui.Context, windowHeight float32) {
 	controls := func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			a.trackLine(c, m3.HeadlineSmall, m3.TitleMedium).Grow(1)
+			a.trackLine(c, m3.HeadlineSmall, m3.TitleMedium, true).Grow(1)
 			a.likeButton(c)
+			a.dislikeButton(c)
 		})
 		a.scrubber(c)
 		ui.Row(c).Justify(ui.Center).Children(func() {
@@ -243,7 +257,7 @@ func (a *app) nowPlayingMain(c *ui.Context, windowHeight float32) {
 		})
 		ui.Row(c).Justify(ui.Center).AlignItems(ui.Center).Gap(8).Children(func() {
 			a.volumeControl(c, 200)
-			a.speedControl(c, "np-speed")
+			a.speedButton(c, "np-speed")
 		})
 	}
 	if windowHeight < 700 {
@@ -286,10 +300,14 @@ func (a *app) nowPlayingArtwork(c *ui.Context, imageSize int, artSize, radius fl
 	}
 }
 
+// panelSurface is the tone of the card the queue, lyrics and related songs
+// sit on. The lyrics dissolve into it where the card ends.
+func panelSurface(sc m3.Scheme) ui.Color { return sc.SurfaceContainerLow.Alpha(0.9) }
+
 // sidePanel holds the queue, lyrics and related songs under tabs, on a tonal card.
 func (a *app) sidePanel(c *ui.Context, wide, compactQueue bool) {
 	sc := m3.Of(c).Scheme
-	card := ui.Column(c.Key("np-side")).Radius(m3.ExtraLarge).Background(sc.SurfaceContainerLow.Alpha(0.9)).Clip().
+	card := ui.Column(c.Key("np-side")).Radius(m3.ExtraLarge).Background(panelSurface(sc)).Clip().
 		Gap(4)
 	if compactQueue {
 		card.Padding(4, 0, 0)
@@ -316,6 +334,7 @@ func (a *app) sidePanel(c *ui.Context, wide, compactQueue bool) {
 			a.queueView(c, compactQueue)
 		}
 	})
+	a.lyricsSourceDialog(c)
 }
 
 func (a *app) nowPlayingTabs(c *ui.Context, compact bool) {
@@ -538,7 +557,7 @@ func (a *app) queueView(c *ui.Context, compact bool) {
 	if index, ok := q.trackAt(a.nowPlaying.queueSelectionCursor); ok {
 		if view.Submitted() {
 			a.clearQueueSelection()
-			a.playFrom(q.at(index), q.items, index, youtube.UpNextOptions{}, q.source)
+			a.start(q.moveTo(index))
 		}
 		if list.Shortcut(c, ui.Shift, ui.KeyF10) {
 			a.menu.show(songKey(q.at(index), songOptions{list: "queue", position: index}), false, 0, 0)

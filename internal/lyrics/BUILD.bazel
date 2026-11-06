@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "lyrics",
+    srcs = ["lyrics.go"],
+    importpath = "github.com/elianiva/meiro/internal/lyrics",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "lyrics_test",
+    srcs = ["lyrics_test.go"],
+    embed = [":lyrics"],
+)

@@ -12,8 +12,8 @@ import (
 
 // The sizes of what a shelf holds, in DIPs.
 const (
-	cardWidth   = 176
-	cardArt     = cardWidth - 16
+	cardWidth   = 160
+	cardArt     = cardWidth
 	cardGap     = 4
 	columnWidth = 392
 	rowHeight   = 64
@@ -32,6 +32,11 @@ func (a *app) pageList(c *ui.Context) {
 		}
 		return rows[i].key()
 	}
+	// The songs toolbar heads the list of songs, and stays at its top while
+	// they scroll under it.
+	a.list.Header = func(i int) bool {
+		return i < len(rows) && rows[i].shelf == "playlist-sort-header"
+	}
 	a.list.Label = func(i int) string {
 		if i >= len(rows) {
 			return ""
@@ -43,11 +48,13 @@ func (a *app) pageList(c *ui.Context) {
 	}
 	list := ui.List(c, a.list, len(rows), func(i int) {
 		a.rowView(c, rows, i)
-	}).Grow(1).Padding(0, 0, a.clearance())
+	}).Grow(1).Padding(0, 0, a.clearance()).TrackScroll(a.page.scroll).HandleInput(a.pullScroll)
 	// The grid's lines depend on the width, which is known only once the list
 	// has been laid out: plan the lines again when it turns out different.
 	r, _ := a.route()
 	a.listWidth = list.Bounds().W
+	first, _ := a.list.Visible()
+	a.detailCompact = r.isDetail() && first > 0
 	if a.gridColumns(r) != a.page.rowsKey.columns {
 		c.Invalidate()
 	}
@@ -74,8 +81,12 @@ func (a *app) rowView(c *ui.Context, rows []row, i int) {
 		next := i+1 < len(rows) && (rows[i+1].kind == rowCards || rows[i+1].kind == rowColumns)
 		if r.shelf == "playlist-sort-header" {
 			sc := m3.Of(c).Scheme
-			ui.Row(c).Padding(8, pageGutter-8, 8, pageGutter).AlignItems(ui.Center).Children(func() {
+			// The row stays at the top of the list while the songs scroll
+			// under it, so it carries the page's own colour: without one the
+			// songs would show through it.
+			ui.Row(c).Padding(8, pageGutter-8, 8, pageGutter).Gap(12).AlignItems(ui.Center).Background(sc.Surface).Children(func() {
 				m3.EmphasizedText(c, m3.TitleLarge, r.title).SingleLine().Grow(1).MinWidth(0).TextColor(sc.OnSurface)
+				a.playlistSearch(c)
 				a.playlistSort(c)
 			})
 		} else {
@@ -165,7 +176,7 @@ func (a *app) sectionHeading(c *ui.Context, r row, paged, first bool) {
 // are built; what is off view keeps its width as a spacer, so the shelf
 // scrolls exactly as it did when every card was built.
 func (a *app) cardShelf(c *ui.Context, r row) {
-	const gap = 4
+	const gap = 16
 	st := a.carousel(r.shelf)
 	again := st.NeedsMeasurement()
 	first, last := st.VisibleRange(len(r.items), cardWidth, gap, pageGutter-8, 1)
@@ -343,14 +354,14 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 	key := cardKey(item, list, position)
 	card := ui.ButtonBase(c.Key(key))
 	hovered := card.Hovered()
-	card.Column().AlignItems(ui.Start).Width(cardWidth).Shrink(0).Padding(8).Gap(10).Radius(m3.ExtraLarge).Cursor(ui.CursorPointer).
+	card.Column().AlignItems(ui.Start).Width(cardWidth).Shrink(0).Padding(0, 0, 12, 0).Gap(10).Radius(m3.ExtraLarge).Cursor(ui.CursorPointer).
 		Background(m3.Layer(sc.Surface, sc.OnSurface, hoverOpacity(hovered || card.FocusVisible()))).
 		Label(item.Title)
 	played, menuClicked := false, false
 	var menuButton, menuAnchor ui.Element
 	hasMenu, hasAnchor := false, false
 	card.Children(func() {
-		radius := artRadius(item, m3.LargeIncreased)
+		radius := artRadius(item, m3.ExtraLarge)
 		opening := a.isOpening(key)
 		a.art(c, item.Thumbnail, 256, cardArt, radius, func() {
 			if isNewPlaylist(item) {
@@ -384,8 +395,8 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 				}
 			}
 			if kind == youtube.TargetTrack || kind == youtube.TargetAlbum || kind == youtube.TargetPlaylist {
-				fab := m3.FAB(c, m3.FABSpec{Icon: m3.IconPlay, Size: m3.FABSmall, Tone: m3.FABPrimary, Key: "play"}).
-					Attach(ui.AnchorBottomRight, ui.AnchorBottomRight).Right(8).Bottom(8)
+				fab := m3.FAB(c, m3.FABSpec{Icon: m3.IconPlay, Size: m3.FABSmall, Tone: m3.FABPrimary, Radius: 16, Key: "play"}).
+					Attach(ui.AnchorBottomRight, ui.AnchorBottomRight).Right(12).Bottom(12)
 				fab.Label("Play " + item.Title)
 				if !hovered && !card.FocusWithin() {
 					fab.Opacity(0).PassThrough()
@@ -395,10 +406,12 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 				}
 			}
 		})
-		m3.EmphasizedText(c, m3.TitleSmall, item.Title).Width(cardArt).SingleLine().TextColor(sc.OnSurface)
-		if item.Subtitle != "" {
-			m3.Text(c, m3.BodySmall, item.Subtitle).Width(cardArt).SingleLine().TextColor(sc.OnSurfaceVariant).Margin(-6, 0, 0)
-		}
+		ui.Column(c).Width(cardWidth).Shrink(0).Padding(0, 16, 0, 16).Gap(2).Children(func() {
+			m3.EmphasizedText(c, m3.TitleSmall, item.Title).Width(cardWidth - 32).SingleLine().TextColor(sc.OnSurface)
+			if item.Subtitle != "" {
+				m3.Text(c, m3.BodySmall, item.Subtitle).Width(cardWidth - 32).SingleLine().TextColor(sc.OnSurfaceVariant)
+			}
+		})
 		// A menu the pointer opened points at the pointer; one the menu
 		// button opened points at the button.
 		menuAnchor, hasAnchor = a.menu.pointerAnchor(c, key+"-menu")

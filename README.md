@@ -5,10 +5,23 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#troubleshooting">Troubleshooting</a> ·
+  <a href="#build-from-source">Build</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
+
 A lightweight desktop music player for YouTube Music. Meiro has a native
 interface rather than a browser-based one, and typically uses about 100 MB of
 memory. It plays music without loading the YouTube Music web page, and can
 scrobble your listening to Last.fm.
+
+<p align="center">
+  <a href="docs/screenshots/lyrics.png"><img src="docs/screenshots/lyrics.png" alt="Full player with synced lyrics, the sung line lit in the middle" width="720"></a>
+</p>
 
 > **Beta and unofficial.** Meiro is an independent project. It is not made,
 > endorsed or supported by YouTube or Google, and it uses YouTube's private web
@@ -16,31 +29,6 @@ scrobble your listening to Last.fm.
 > Meiro (browsing, search, playback, sign-in) may stop working until it is
 > updated. See [Known issues](#known-issues) and
 > [Troubleshooting](#troubleshooting).
-
-## Why I made it
-
-I use YouTube Music exclusively. It doesn't have a desktop app, and the web app
-is such a resource hog: it takes around 600-800 MB of RAM on day-to-day use. So
-I decided what someone with a lot of tokens to spare would do: make it myself.
-
-The app is built using [MyGO!!!!!](https://github.com/egoist/mygo), a framework
-for building native desktop apps with a low footprint using Go. It's relatively new, and
-I just wanted to try it out myself :p It's built using the Material 3 Expressive
-design language, because, duh?
-
-Basically what I'd expect from the official YouTube Music, since we're supposed
-to be using Material 3 Expressive at this point. Google hasn't done it (yet?),
-so I made it myself.
-
-## Where the name comes from
-
-Meiro is built with the [MyGO](https://github.com/egoist/mygo) framework, and
-its name comes from one of MyGO!!!!!'s songs,
-[迷路日々](https://www.youtube.com/watch?v=STgVa-reZkM). The title is written
-with the characters for *meiro* (迷路, "maze") and *hibi* (日々, "days"), so it
-reads as "maze days" or "meiro days". But the song is pronounced "Melody"
-(メロディ), a pun on the English word. The app is named Meiro after the first
-half of the title.
 
 ## Features
 
@@ -63,7 +51,9 @@ half of the title.
   volume, and a queue you can see and change. A small player follows you while
   you browse, and the full player shows the queue, lyrics and related songs.
 - **Lyrics that follow the song.** The line being sung is highlighted as the
-  song plays. You can switch to plain text.
+  song plays, and word-synced lyrics light each word as it is reached. Meiro
+  takes them from Better Lyrics, YouTube Music or LRCLIB. You can switch to
+  plain text.
 - **Music that keeps going.** When your queue ends, Meiro adds similar songs so
   the music does not stop.
 - **Pick up where you left off.** Open Meiro again and your queue and song are
@@ -72,7 +62,7 @@ half of the title.
   mini player from the tray. On Linux, the tray menu offers **Open Meiro** and
   **Quit**; the mini player is not available there.
 - **Works with your computer's controls.** Use your media keys, the Now Playing
-  widget on Mac, or the media controls on Linux.
+  widget on Mac, or the media controls on Windows and Linux.
 - **Share what you hear on Discord.** With Discord or another client that
   supports Discord Rich Presence running, enable Discord Rich Presence in
   Settings → Desktop to show the current track, artist, cover and a time bar
@@ -99,6 +89,7 @@ half of the title.
   preset. Turn on volume levelling so songs play at a similar loudness.
 - **Colours and themes.** Light, dark, or follow your computer. Pick a colour,
   or let the app take its colours from the album art of the song playing.
+  Take the colours from matugen to [match the rest of the desktop exactly](#match-your-desktop-with-matugen).
 - **Zoom.** Make everything on screen larger or smaller, from 80% to 200%, in
   Settings → Appearance or with `Cmd`/`Ctrl` and `=` or `-`.
 
@@ -118,34 +109,9 @@ half of the title.
 - **Updates itself.** Meiro checks for new versions once a day. You can turn
   this off.
 
-## Non-goals
-
-Meiro stays small on purpose. These things stay out of scope and will not be
-implemented. If you open a pull request that adds one of them, I will not
-accept it. Feel free to maintain a fork of your own if you want to add these
-features.
-
-- **Video.** Music videos play as audio, with a badge on the artwork. Meiro
-  shows no picture.
-- **Local files.** Meiro plays what YouTube Music has. It does not import your
-  own audio files.
-- **Uploads.** Meiro does not upload music to YouTube Music or manage an
-  upload library.
-- **Casting.** Meiro plays on the computer it runs on. It does not send the
-  music to a TV, a speaker or another device.
-- **Other services.** Meiro plays YouTube Music only. It does not play from
-  Spotify, Apple Music or another service.
-- **Social features.** Meiro changes only your own library: likes, saved
-  albums, follows and your own playlists. It does not comment, share a library
-  or collaborate on a playlist.
-
-<p align="center">
-  <a href="docs/screenshots/lyrics.png"><img src="docs/screenshots/lyrics.png" alt="Full player with synced lyrics, the sung line lit in the middle" width="720"></a>
-</p>
-
 ## Screenshots
 
-These screenshots show Meiro using a signed-in YouTube Music account. Click an
+Screenshots show Meiro using a signed-in YouTube Music account. Click an
 image to see it full size.
 
 <table>
@@ -173,7 +139,13 @@ image to see it full size.
 
 ## Install
 
-Download the latest build for your system from the
+On macOS, install with Homebrew:
+
+```sh
+brew install --cask elianiva/tap/meiro
+```
+
+On any system, you can download the latest build from the
 [releases page](https://github.com/elianiva/meiro/releases).
 
 ### Which file do I download?
@@ -225,9 +197,11 @@ For example, on Ubuntu with a normal Intel or AMD computer, download
 
 ### Install steps
 
-**macOS:** Open the disk image and drag Meiro to Applications. The app is not
-notarized by Apple yet, so the first time, right-click it and choose **Open**
-(or allow it under System Settings > Privacy & Security).
+**macOS:** With Homebrew, the command above is all you need. The cask clears
+the download flag as it installs, so Meiro opens on the first launch without a
+prompt. From the disk image, open it and drag Meiro to Applications. The app is
+not notarized by Apple yet, so the first time, right-click it and choose
+**Open** (or allow it under System Settings > Privacy & Security).
 
 **Linux:** Install the `.deb` on Debian or Ubuntu, or the `.rpm` on Fedora or a
 compatible RPM-based distribution. With Flatpak, run
@@ -322,6 +296,35 @@ the file is not encrypted. A locked or failing credential store does not make
 Meiro write the session unencrypted. Choose **Sign out** to remove Meiro's saved session.
 
 Public browsing and playback do not need an account.
+
+## Match your desktop with matugen
+
+Meiro can use the full set of colours matugen makes, so it matches your other
+apps. Matugen writes them to their own file, `colors.json`, so your settings
+are never touched.
+
+1. Copy [`meiro-colors.json`](docs/matugen/meiro-colors.json) to
+   `~/.config/matugen/templates/`.
+2. Add it to `~/.config/matugen/config.toml`. The output goes in Meiro's data
+   folder, next to `settings.json` (`~/.config/Meiro` on Linux,
+   `~/Library/Application Support/Meiro` on macOS, `%AppData%\Meiro` on
+   Windows):
+
+   ```toml
+   [templates.meiro]
+   input_path = "~/.config/matugen/templates/meiro-colors.json"
+   output_path = "~/.config/Meiro/colors.json"
+   ```
+
+3. Run matugen as usual, for example `matugen image wallpaper.png`.
+4. In Settings → Appearance, set **Colour source** to **Matugen**.
+
+Meiro recolours as soon as the file changes, and goes back to your seed if you
+delete it. The file holds a light and a dark set, so Settings → Appearance →
+Theme still chooses between them. While the source is Matugen, the colour and
+palette pickers are hidden; **Fixed** brings both back and **Artwork** brings
+back the palette, and the file is ignored. A role the file leaves out keeps the
+colour Meiro makes from your seed.
 
 ## Troubleshooting
 
@@ -434,6 +437,32 @@ Meiro reads cookies only when you choose to sign in, and only to take the
 YouTube Music session. With the browser window, it reads them from the window
 that it opened. With an import, it reads them from the browser that you pick.
 
+## Non-goals
+
+Meiro stays small on purpose. These things stay out of scope and will not be
+implemented. If you open a pull request that adds one of them, I will not
+accept it. Feel free to maintain a fork of your own if you want to add these
+features.
+[GroophyLifefor/meiro](https://github.com/GroophyLifefor/meiro) is a great
+example. They built SoundCloud, a sync server, MusicBrainz linking,
+recommendations and a listening history page, among many other things, on top
+of Meiro. It is not part of Meiro, but feel free to check it out if you want to
+see how these features can work.
+
+- **Video.** Music videos play as audio, with a badge on the artwork. Meiro
+  shows no picture.
+- **Local files.** Meiro plays what YouTube Music has. It does not import your
+  own audio files.
+- **Uploads.** Meiro does not upload music to YouTube Music or manage an
+  upload library.
+- **Casting.** Meiro plays on the computer it runs on. It does not send the
+  music to a TV, a speaker or another device.
+- **Other services.** Meiro plays YouTube Music only. It does not play from
+  Spotify, Apple Music or another service.
+- **Social features.** Meiro changes only your own library: likes, saved
+  albums, follows and your own playlists. It does not comment, share a library
+  or collaborate on a playlist.
+
 ## Build from source
 
 You need [Bazel](https://bazel.build/), installed through
@@ -458,6 +487,37 @@ Releases include full and minimal builds: a universal DMG for macOS, a Windows
 `amd64` and `arm64` `.deb`, `.rpm`, `.flatpak` (full build only), `.AppImage`, and `.tar.gz` downloads.
 Minimal downloads include `-minimal` in the filename. Find them on the
 [releases page](https://github.com/elianiva/meiro/releases).
+
+## Contributing
+
+Bug reports, fixes and docs are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) first, and check the
+[non-goals](#non-goals) before you propose a feature.
+
+## About
+
+I use YouTube Music exclusively. It doesn't have a desktop app, and the web app
+is such a resource hog: it takes around 600-800 MB of RAM on day-to-day use. So
+I decided what someone with a lot of tokens to spare would do: make it myself.
+
+The app is built using [MyGO!!!!!](https://github.com/egoist/mygo), a framework
+for building native desktop apps with a low footprint using Go. It's relatively new, and
+I just wanted to try it out myself :p It's built using the Material 3 Expressive
+design language, because, duh?
+
+Basically what I'd expect from the official YouTube Music, since we're supposed
+to be using Material 3 Expressive at this point. Google hasn't done it (yet?),
+so I made it myself.
+
+### Where the name comes from
+
+Meiro is built with the [MyGO](https://github.com/egoist/mygo) framework, and
+its name comes from one of MyGO!!!!!'s songs,
+[迷路日々](https://www.youtube.com/watch?v=STgVa-reZkM). The title is written
+with the characters for *meiro* (迷路, "maze") and *hibi* (日々, "days"), so it
+reads as "maze days" or "meiro days". But the song is pronounced "Melody"
+(メロディ), a pun on the English word. The app is named Meiro after the first
+half of the title.
 
 ## Credits
 

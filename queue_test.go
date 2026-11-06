@@ -59,6 +59,55 @@ func TestQueueKeepsItsPlaceThroughChanges(t *testing.T) {
 	}
 }
 
+// Adding to the queue while auto-play already plays a generated track puts
+// the added tracks after it, not behind it in the original queue.
+func TestQueueAddsAfterAGeneratedCurrent(t *testing.T) {
+	q := newQueue()
+	chosen := tracks("a", "b", "c")
+	q.replace(chosen[0], chosen, 0, "Album")
+	q.appendGenerated(tracks("r1", "r2", "r3"))
+	q.moveTo(q.find("r1"))
+	q.insert(youtube.MusicItem{VideoID: "x"}, false, true)
+	q.insert(youtube.MusicItem{VideoID: "y"}, false, true)
+	want := []string{"a", "b", "c", "r1", "x", "y", "r2", "r3"}
+	if got := ids(q.items); !slices.Equal(got, want) || q.recStart != 6 {
+		t.Fatalf("queue = %v, recStart %d; want %v and 6", got, q.recStart, want)
+	}
+	if next, ok := q.next(true, repeatOff); !ok || q.at(next).VideoID != "x" {
+		t.Fatalf("next = %d, %v; want x", next, ok)
+	}
+	q.moveTo(q.find("x"))
+	if next, ok := q.next(true, repeatOff); !ok || q.at(next).VideoID != "y" {
+		t.Fatalf("next after x = %d, %v; want y", next, ok)
+	}
+}
+
+// A recommendation that has played is no longer a recommendation: it folds
+// into the queue, and only the ones still to come stay under the heading.
+func TestPlayedRecommendationsFoldIntoTheQueue(t *testing.T) {
+	q := newQueue()
+	chosen := tracks("a", "b")
+	q.replace(chosen[0], chosen, 0, "Album")
+	q.appendGenerated(tracks("r1", "r2", "r3"))
+	q.moveTo(q.find("r1"))
+	if got := ids(q.items); !slices.Equal(got, []string{"a", "b", "r1", "r2", "r3"}) || q.recStart != 3 {
+		t.Fatalf("playing r1: %v, recStart %d", got, q.recStart)
+	}
+	q.moveTo(q.find("r2"))
+	if q.recStart != 4 {
+		t.Fatalf("playing r2 left recStart %d, want 4", q.recStart)
+	}
+	q.moveTo(q.find("r3"))
+	if q.recStart != -1 || q.hasDivider() {
+		t.Fatalf("playing the last recommendation left recStart %d", q.recStart)
+	}
+	// Recommendations that arrive later start the section again.
+	q.appendGenerated(tracks("r4", "r5"))
+	if got := ids(q.items); !slices.Equal(got, []string{"a", "b", "r1", "r2", "r3", "r4", "r5"}) || q.recStart != 5 {
+		t.Fatalf("new recommendations: %v, recStart %d", got, q.recStart)
+	}
+}
+
 // A queue that would hold more generated tracks than the limit drops played
 // tracks first, and never more than the limit.
 func TestQueueBoundsGeneratedTracks(t *testing.T) {
@@ -133,6 +182,39 @@ func TestShuffleKeepsTheGeneratedTracksAtTheEnd(t *testing.T) {
 	}
 	if q.index != 0 || q.recStart != 3 {
 		t.Errorf("restore left index %d and recStart %d, want 0 and 3", q.index, q.recStart)
+	}
+}
+
+func TestLatePlaylistSongsPreserveHistoryAndPlayNext(t *testing.T) {
+	for _, shuffle := range []bool{false, true} {
+		q := newQueue()
+		chosen := tracks("a", "b", "c", "d")
+		q.replace(chosen[0], chosen, 0, "Playlist")
+		q.appendGenerated(tracks("r1", "r2"))
+		if shuffle {
+			q.shuffleQueue()
+		}
+		q.moveTo(1)
+		history := slices.Clone(q.items[:2])
+		q.insert(tracks("next")[0], true, true)
+		q.appendPlaylist(tracks("late1", "late2", "late1"), shuffle)
+		if q.index != 1 || !slices.Equal(ids(q.items[:2]), ids(history)) {
+			t.Fatalf("shuffle=%t changed played tracks: %v", shuffle, ids(q.items))
+		}
+		if q.recStart != 8 || !slices.Equal(ids(q.items[8:]), []string{"r1", "r2"}) || len(q.generated) != 2 {
+			t.Fatalf("shuffle=%t changed generated tracks: %v at %d", shuffle, ids(q.items), q.recStart)
+		}
+		if next, ok := q.next(true, repeatOff); !ok || q.at(next).VideoID != "next" {
+			t.Fatalf("shuffle=%t lost play-next priority", shuffle)
+		}
+		q.restoreQueue()
+		want := []string{"a", "b", "c", "d", "late1", "late2", "late1", "next"}
+		if !shuffle {
+			want = []string{"a", "b", "next", "c", "d", "late1", "late2", "late1"}
+		}
+		if !slices.Equal(ids(q.items[:8]), want) || q.current().VideoID != history[1].VideoID {
+			t.Fatalf("shuffle=%t restored %v at %d", shuffle, ids(q.items), q.index)
+		}
 	}
 }
 
@@ -315,6 +397,40 @@ func TestAppendGeneratedKeepsChosenVideoWhenAudioVersionIsRecommended(t *testing
 	}
 }
 
+func TestDroppingMarkedAITracksKeepsTheQueueConsistent(t *testing.T) {
+	chosen := []youtube.MusicItem{
+		{VideoID: "a", Title: "A"},
+		{VideoID: "b", Title: "B"},
+		{VideoID: "chosen-ai", Title: "Chosen AI", AIDisclosure: youtube.AIAlteredOrGenerated},
+	}
+	q := newQueue()
+	q.replace(chosen[1], chosen, 1, "Mix")
+	q.appendGenerated([]youtube.MusicItem{
+		{VideoID: "generated-ai", Title: "Generated AI", AIDisclosure: youtube.AIAlteredOrGenerated},
+		{VideoID: "r2", Title: "Human recommendation"},
+	})
+	q.playNext = "chosen-ai"
+
+	removed := q.dropMarkedAI(func(item youtube.MusicItem) bool {
+		return item.AIDisclosure == youtube.AIAlteredOrGenerated
+	})
+	if !removed {
+		t.Fatal("no marked track was removed")
+	}
+	if got := ids(q.items); !slices.Equal(got, []string{"a", "b", "r2"}) {
+		t.Fatalf("queue = %v, want the current track and the unmarked recommendation", got)
+	}
+	if q.current().VideoID != "b" || q.recStart != 2 {
+		t.Errorf("current %q, recStart %d; want b at 2", q.current().VideoID, q.recStart)
+	}
+	if _, ok := q.generated["r2"]; !ok {
+		t.Error("the remaining generated track lost its marker")
+	}
+	if q.playNext != "" {
+		t.Errorf("play-next remained %q", q.playNext)
+	}
+}
+
 // The queue can hold the same song twice, and only the copy at the queue's
 // place is picked out as playing. Every other list picks the song playing out
 // by its own ID.
@@ -334,5 +450,44 @@ func TestTheSameSongTwiceInTheQueuePlaysFromOneRow(t *testing.T) {
 	}
 	if !a.playingRow(song, songOptions{list: "playlist", position: 1}) {
 		t.Error("a list that holds the song once no longer picks it out")
+	}
+}
+
+func TestQueueNextEligible(t *testing.T) {
+	tests := []struct {
+		name     string
+		likes    []youtube.LikeStatus
+		index    int
+		playNext string
+		recStart int
+		autoPlay bool
+		repeat   repeatMode
+		skip     bool
+		want     int
+		ok       bool
+	}{
+		{name: "disabled", likes: []youtube.LikeStatus{youtube.Liked, youtube.Disliked}, recStart: -1, want: 1, ok: true},
+		{name: "skip dislike", likes: []youtube.LikeStatus{youtube.Liked, youtube.Disliked, youtube.LikeUnknown}, recStart: -1, skip: true, want: 2, ok: true},
+		{name: "play next priority", likes: []youtube.LikeStatus{youtube.Liked, youtube.Liked, youtube.Indifferent}, playNext: "c", recStart: -1, skip: true, want: 2, ok: true},
+		{name: "disliked play next", likes: []youtube.LikeStatus{youtube.Liked, youtube.Liked, youtube.Disliked}, playNext: "c", recStart: -1, skip: true, want: 1, ok: true},
+		{name: "repeat wraps", likes: []youtube.LikeStatus{youtube.Liked, youtube.Disliked, youtube.Disliked}, index: 1, recStart: -1, repeat: repeatQueue, skip: true, want: 0, ok: true},
+		{name: "all disliked", likes: []youtube.LikeStatus{youtube.Disliked, youtube.Disliked}, recStart: -1, repeat: repeatQueue, skip: true},
+		{name: "all disliked recommendations", likes: []youtube.LikeStatus{youtube.Liked, youtube.Disliked, youtube.Disliked}, recStart: 1, autoPlay: true, skip: true},
+		{name: "autoplay boundary", likes: []youtube.LikeStatus{youtube.Liked, youtube.Disliked, youtube.Liked}, recStart: 2, skip: true},
+		{name: "autoplay enabled", likes: []youtube.LikeStatus{youtube.Liked, youtube.Disliked, youtube.Liked}, recStart: 2, autoPlay: true, skip: true, want: 2, ok: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := newQueue()
+			q.items = tracks("a", "b", "c")[:len(tt.likes)]
+			for i, like := range tt.likes {
+				q.items[i].Like = like
+			}
+			q.index, q.recStart, q.playNext = tt.index, tt.recStart, tt.playNext
+			got, ok := q.nextEligible(tt.autoPlay, tt.repeat, tt.skip)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("nextEligible = %d, %v; want %d, %v", got, ok, tt.want, tt.ok)
+			}
+		})
 	}
 }

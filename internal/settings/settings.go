@@ -8,6 +8,7 @@ import (
 	"log"
 	"maps"
 	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +33,9 @@ type Settings struct {
 	Style int `json:"style"`
 	// Dynamic takes the seed from the artwork of the track playing.
 	Dynamic bool `json:"dynamic"`
+	// Matugen takes the colours from colors.json, which matugen writes, in
+	// place of the seed. Dynamic and Matugen are never both on.
+	Matugen bool `json:"matugen,omitempty"`
 	// RailExpanded keeps the navigation rail open, with labels beside icons.
 	RailExpanded bool `json:"railExpanded"`
 	// Zoom is how large the interface is, as a percentage: 100 shows it at
@@ -39,8 +43,16 @@ type Settings struct {
 	Zoom int `json:"zoom,omitempty"`
 	// Volume is the player's, from 0 to 100.
 	Volume float64 `json:"volume"`
+	// LogVolume makes the volume slider follow a logarithmic curve, with finer
+	// steps at low volumes. Off keeps the slider linear.
+	LogVolume bool `json:"logVolume,omitempty"`
 	// AutoPlay adds YouTube Music's generated queue after the selected tracks.
 	AutoPlay bool `json:"autoPlay"`
+	// AutoSkipDisliked skips tracks known to have a thumbs-down.
+	AutoSkipDisliked bool `json:"autoSkipDisliked,omitempty"`
+	// ExcludeAIGenerated skips songs YouTube marks as altered or generated
+	// with AI. Unlabelled AI music still plays.
+	ExcludeAIGenerated bool `json:"excludeAIGenerated,omitempty"`
 	// NormalizeLoudness applies YouTube's per-track loudness correction when signed in.
 	NormalizeLoudness bool `json:"normalizeLoudness"`
 	// CacheSongs is how many recently played audio files to keep on disk.
@@ -52,6 +64,10 @@ type Settings struct {
 	// Channel is the signed-in account's channel to act as, or empty for the
 	// account's default one.
 	Channel string `json:"channel,omitempty"`
+	// AccountIndex selects the Google account within a browser session.
+	AccountIndex int `json:"accountIndex,omitempty"`
+	// AccountEmail detects a browser session whose Google accounts were reordered.
+	AccountEmail string `json:"accountEmail,omitempty"`
 	// SignInSource is the browser the session was imported from, or empty for
 	// one that was pasted. YouTube retires the cookie of a browser session as
 	// the browser goes on using it, so this is where the session is read again
@@ -59,20 +75,26 @@ type Settings struct {
 	SignInSource string `json:"signInSource,omitempty"`
 	// StaticLyrics shows lyrics as plain text even when a track has them timed.
 	StaticLyrics bool `json:"staticLyrics,omitempty"`
-	// NotifyTrack shows a desktop notification when a new track starts.
+	// NotifyTrack shows a desktop notification when a new track starts,
+	// except on macOS, where playback is presented by the notch or menu bar.
 	NotifyTrack bool `json:"notifyTrack"`
 	// GlobalShortcut plays or pauses from anywhere with
 	// CmdOrCtrl+Shift+Space.
 	GlobalShortcut bool `json:"globalShortcut"`
-	// ShowTray keeps an icon in the menu bar with transport controls.
+	// ShowTray keeps an icon with transport controls on platforms with a tray.
+	// On macOS the menu bar follows ShowNotch and display availability instead.
 	ShowTray bool `json:"showTray"`
+	// ShowNotch prefers the compact player around a MacBook's camera housing;
+	// macOS uses the menu bar mini player when it is off or no notch is available.
+	ShowNotch bool `json:"showNotch"`
 	// TrayMark is the menu bar icon style on macOS and Linux.
 	TrayMark TrayMark `json:"trayMark"`
 	// DiscordPresence shares the current track with the running Discord client.
 	DiscordPresence bool `json:"discordPresence,omitempty"`
 	// CloseToTray hides the window instead of quitting when the user closes
-	// it, while the tray icon is shown. Empty means the user has not chosen
-	// yet, so closing asks.
+	// it. macOS reopens from the Dock, notch or menu bar; other platforms keep
+	// a tray icon.
+	// Empty means the user has not chosen yet, so closing asks.
 	CloseToTray *bool `json:"closeToTray,omitempty"`
 	// OpenAtLogin starts Meiro when the user logs in.
 	OpenAtLogin bool `json:"openAtLogin"`
@@ -129,8 +151,8 @@ const (
 // Defaults is what a first run starts with.
 func Defaults() Settings {
 	return Settings{
-		Seed: "#6750a4", Mode: "system", Volume: 70, AutoPlay: true, CacheSongs: audio.DefaultLimit, NotifyTrack: true, ShowTray: true, TrayMark: TrayMarkWordmark,
-		Zoom: DefaultZoom, CrossfadeSeconds: DefaultCrossfade,
+		Seed: "#6750a4", Mode: "system", Volume: 70, AutoPlay: true, CacheSongs: audio.DefaultLimit, NotifyTrack: runtime.GOOS != "darwin", ShowTray: runtime.GOOS != "darwin", TrayMark: TrayMarkWordmark,
+		Zoom: DefaultZoom, ShowNotch: true, CrossfadeSeconds: DefaultCrossfade,
 	}
 }
 
@@ -248,44 +270,60 @@ func (s *Settings) Forget(query string) {
 // Load reads the settings file, and returns the defaults for one that is
 // missing or unreadable.
 func Load(path string) Settings {
-	s := Defaults()
 	if path == "" {
-		return s
+		return Defaults()
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			log.Printf("reading settings: %v", err)
 		}
-		return s
+		return Defaults()
 	}
-	// Start from defaults so settings added later get their default when an
-	// older settings file does not contain the new field yet.
-	read := s
-	if err := json.Unmarshal(data, &read); err != nil {
+	s, err := Parse(data)
+	if err != nil {
 		// The next save replaces the file, so say what was lost.
 		log.Printf("settings in %s are not readable, starting from the defaults: %v", path, err)
-		return s
+		return Defaults()
+	}
+	return s
+}
+
+// Parse reads settings from data and repairs values a hand-edited file may
+// hold. It reports an error for data that is not settings JSON, so a watcher
+// can wait for the rest of a file that is still being written.
+func Parse(data []byte) (Settings, error) {
+	// Start from defaults so settings added later get their default when an
+	// older settings file does not contain the new field yet.
+	defaults := Defaults()
+	read := defaults
+	if err := json.Unmarshal(data, &read); err != nil {
+		return defaults, err
 	}
 	if len(read.Recent) > maxRecent {
 		read.Recent = read.Recent[:maxRecent]
 	}
 	if read.Volume < 0 || read.Volume > 100 {
-		read.Volume = s.Volume
+		read.Volume = defaults.Volume
 	}
 	read.CacheSongs = audio.ValidLimit(read.CacheSongs)
 	if _, ok := ParseSeed(read.Seed); !ok {
-		read.Seed = s.Seed
+		read.Seed = defaults.Seed
 	}
 	if read.Mode == "" {
-		read.Mode = s.Mode
+		read.Mode = defaults.Mode
 	}
 	if read.TrayMark != TrayMarkWordmark && read.TrayMark != TrayMarkOMark {
-		read.TrayMark = s.TrayMark
+		read.TrayMark = defaults.TrayMark
 	}
 	read.Zoom = ClampZoom(read.Zoom)
+	if runtime.GOOS == "darwin" {
+		// macOS has no track banners; its menu bar follows the notch choice and
+		// available display, not the legacy ShowTray preference.
+		read.NotifyTrack, read.ShowTray = false, false
+	}
 	read.CrossfadeSeconds = ClampCrossfade(read.CrossfadeSeconds)
-	return read
+	return read, nil
 }
 
 // save writes the settings atomically.
@@ -362,6 +400,13 @@ func (w *Writer) drain(done chan struct{}) {
 	}
 }
 
+// Pending reports whether a save is waiting or on its way to disk.
+func (w *Writer) Pending() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.running
+}
+
 // Wait flushes the latest pending settings state and returns once its write is
 // complete.
 func (w *Writer) Wait() {
@@ -377,4 +422,44 @@ func (w *Writer) Wait() {
 	}
 	w.mu.Unlock()
 	<-done
+}
+
+// ParseColors reads the colours file: an object with "light" and "dark"
+// objects that map role names, such as "primary" or "surface_container_high",
+// to "#rrggbb". It says no to a file that is not that, or that names a colour
+// it cannot read or a role that does not exist, or one with no colours at all, so a typo is not lost quietly.
+func ParseColors(data []byte) (*m3.Colors, error) {
+	var file struct {
+		Light, Dark map[string]string
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, err
+	}
+	if len(file.Light) == 0 && len(file.Dark) == 0 {
+		return nil, errors.New("no colours: expected \"light\" or \"dark\" objects")
+	}
+	read := func(appearance string, in map[string]string) (map[string]ui.Color, error) {
+		out := make(map[string]ui.Color, len(in))
+		var scratch m3.Scheme
+		for role, text := range in {
+			if scratch.Role(role) == nil {
+				return nil, fmt.Errorf("%s: %q is not a colour role", appearance, role)
+			}
+			colour, ok := ParseSeed(text)
+			if !ok {
+				return nil, fmt.Errorf("%s.%s: %q is not #rrggbb", appearance, role, text)
+			}
+			out[role] = colour
+		}
+		return out, nil
+	}
+	light, err := read("light", file.Light)
+	if err != nil {
+		return nil, err
+	}
+	dark, err := read("dark", file.Dark)
+	if err != nil {
+		return nil, err
+	}
+	return &m3.Colors{Light: light, Dark: dark}, nil
 }

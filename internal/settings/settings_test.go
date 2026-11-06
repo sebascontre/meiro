@@ -3,8 +3,26 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func TestMacLoadsLegacyDesktopSettingsWithoutTrayOrBanners(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"showTray":true,"notifyTrack":true,"closeToTray":true,"volume":42}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := runtime.GOOS != "darwin"
+	for _, s := range []Settings{Defaults(), Load(path)} {
+		if s.ShowTray != want || s.NotifyTrack != want {
+			t.Fatalf("desktop options on %s: tray=%v, notifications=%v", runtime.GOOS, s.ShowTray, s.NotifyTrack)
+		}
+	}
+	s := Load(path)
+	if s.CloseToTray == nil || !*s.CloseToTray || s.Volume != 42 {
+		t.Fatal("unrelated playback preferences changed")
+	}
+}
 
 func TestWriterKeepsTheLastStateAndLoadRepairsIt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
@@ -81,5 +99,36 @@ func TestRememberKeepsRecentSearchesUniqueAndBounded(t *testing.T) {
 	s.Forget("i")
 	if s.Recent[0] != "h" {
 		t.Errorf("forget left %v", s.Recent)
+	}
+}
+
+func TestParseColorsReadsMatugenOutputAndRefusesTypos(t *testing.T) {
+	// A trimmed colors.json as matugen writes it from the README's template.
+	colors, err := ParseColors([]byte(`{
+  "light": {"primary": "#006a60", "on_primary": "#ffffff", "surface_container_high": "#e4e9e6"},
+  "dark": {"primary": "#82d5c8", "inverse_primary": "#006a60"}
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := SeedHex(colors.Light["primary"]); got != "#006a60" {
+		t.Errorf("light primary = %s", got)
+	}
+	if got := SeedHex(colors.Dark["inverse_primary"]); got != "#006a60" {
+		t.Errorf("dark inverse_primary = %s", got)
+	}
+	if len(colors.Light) != 3 || len(colors.Dark) != 2 {
+		t.Errorf("roles read: %d light, %d dark", len(colors.Light), len(colors.Dark))
+	}
+
+	for name, file := range map[string]string{
+		"unknown role": `{"dark": {"primry": "#006a60"}}`,
+		"bad colour":   `{"light": {"primary": "teal"}}`,
+		"cut off":      `{"light": {"primary": "#00`,
+		"no colours":   `{"light": {}, "dusk": {"primary": "#006a60"}}`,
+	} {
+		if _, err := ParseColors([]byte(file)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }

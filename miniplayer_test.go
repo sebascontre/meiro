@@ -8,17 +8,24 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/internal/artwork"
 	"github.com/elianiva/meiro/internal/lrclib"
+	"github.com/elianiva/meiro/internal/lyrics"
 	"github.com/elianiva/meiro/internal/playstate"
 	"github.com/elianiva/meiro/internal/settings"
+	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/youtube"
 )
 
@@ -58,6 +65,12 @@ func TestTrayIconStyleCanBeChangedAndSavedInSettings(t *testing.T) {
 	}
 	tt.Type("tray")
 	tt.Frame()
+	if runtime.GOOS == "darwin" || !trayMarkSupported(runtime.GOOS) {
+		if tt.HasText("Wordmark") || tt.HasText("O mark") {
+			t.Fatal("tray style choices appeared on a platform without them")
+		}
+		return
+	}
 	if a.settings.TrayMark != settings.TrayMarkWordmark || !tt.HasText("Wordmark") || !tt.HasText("O mark") {
 		t.Fatalf("tray icon choices or default are wrong: mark=%q, text=%q", a.settings.TrayMark, tt.Texts())
 	}
@@ -106,6 +119,40 @@ func TestMiniPlayerShowsAndControlsWhatPlays(t *testing.T) {
 	}
 }
 
+// The mini player keeps the speed in its overflow menu, so no speed button
+// takes a place beside the volume slider.
+func TestMiniPlayerPicksThePlaybackSpeedFromItsOverflowMenu(t *testing.T) {
+	a := newTestApp(t)
+	a.queue.restore(playstate.State{Items: tracks("a"), Index: 0, RecStart: -1})
+	a.current = a.queue.current()
+	tt := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	tt.Frame()
+	if _, shown := tt.Find("1×"); shown {
+		t.Fatalf("the mini player shows the speed directly: %q", tt.Texts())
+	}
+	if err := tt.Click("Playback speed: 1×"); err != nil {
+		t.Fatalf("no playback speed menu in the mini player: %v in %q", err, tt.Texts())
+	}
+	tt.Frame()
+	if err := tt.Click("Playback speed"); err != nil {
+		t.Fatalf("no row leading to the speeds: %v in %q", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("Normal") || !tt.HasText("2×") {
+		t.Fatalf("the speed menu lacks its choices: %q", tt.Texts())
+	}
+	if err := tt.Click("1.5×"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.settings.MusicSpeed != 1.5 {
+		t.Errorf("music speed = %v, want 1.5", a.settings.MusicSpeed)
+	}
+	if !tt.HasText("Playback speed: 1.5×") {
+		t.Errorf("the overflow button does not name the new speed: %q", tt.Texts())
+	}
+}
+
 func TestGoToArtistFromMiniPlayerOpensTheArtistPage(t *testing.T) {
 	a := newTestApp(t)
 	track := youtube.MusicItem{
@@ -144,16 +191,7 @@ func TestGoToArtistFromMiniPlayerOpensTheArtistPage(t *testing.T) {
 	}
 }
 
-func TestMiniPlayerRendersWithPopoverVibrancy(t *testing.T) {
-	a := newTestApp(t)
-	tt := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
-	tt.SetVibrancy(true)
-	if !tt.HasText("Nothing playing") || !tt.HasText("Open Meiro") || !tt.HasText("Quit") {
-		t.Fatalf("vibrant mini player lost its content: %q", tt.Texts())
-	}
-}
-
-func TestMinimizeToTrayShowsTheTrayWithoutRememberingTheChoice(t *testing.T) {
+func TestKeepRunningMakesTheMenuBarAvailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	a := newTestApp(t)
 	a.saver.Path = path
@@ -164,8 +202,12 @@ func TestMinimizeToTrayShowsTheTrayWithoutRememberingTheChoice(t *testing.T) {
 	}
 	a.saver.Wait()
 	saved := settings.Load(path)
-	if !a.settings.ShowTray || !saved.ShowTray {
-		t.Fatalf("the tray is off after choosing it: in memory %v, saved %v", a.settings.ShowTray, saved.ShowTray)
+	wantTray := runtime.GOOS != "darwin"
+	if a.settings.ShowTray != wantTray || saved.ShowTray != wantTray {
+		t.Fatalf("keep running has the wrong tray state: in memory %v, saved %v, want %v", a.settings.ShowTray, saved.ShowTray, wantTray)
+	}
+	if !a.trayEnabled() {
+		t.Fatal("keeping the window in the background left no menu bar player")
 	}
 	if a.settings.CloseToTray != nil || saved.CloseToTray != nil {
 		t.Fatalf("an answer without Remember was kept: in memory %v, saved %v", a.settings.CloseToTray, saved.CloseToTray)
@@ -207,7 +249,7 @@ func TestLyricsSwitchBetweenSyncedAndStatic(t *testing.T) {
 	a.lyricsSource = func(context.Context, lrclib.Query) (*lrclib.Lyrics, error) {
 		return &lrclib.Lyrics{
 			Plain:  "first words\nsecond words",
-			Synced: []lrclib.Line{{At: 0, Text: "first words"}, {At: 30 * time.Second, Text: "second words"}},
+			Synced: []lyrics.Line{{At: 0, Text: "first words"}, {At: 30 * time.Second, Text: "second words"}},
 		}, nil
 	}
 	a.queue.restore(playstate.State{Items: tracks("a"), Index: 0, RecStart: -1})
@@ -219,17 +261,17 @@ func TestLyricsSwitchBetweenSyncedAndStatic(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !tt.HasText("Synced") || !tt.HasText("Static") || !tt.HasText("first words") {
-		t.Fatalf("timed lyrics are not shown with their modes: %q", tt.Texts())
+	if !tt.HasText("first words") {
+		t.Fatalf("timed lyrics are not shown: %q", tt.Texts())
 	}
-	if err := tt.Click("Static"); err != nil {
+	if err := tt.Click("Synced lyrics"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if !a.settings.StaticLyrics || !tt.HasText("first words\nsecond words") {
 		t.Fatalf("static mode shows the plain text: %v %q", a.settings.StaticLyrics, tt.Texts())
 	}
-	if err := tt.Click("Synced"); err != nil {
+	if err := tt.Click("Synced lyrics"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -268,7 +310,7 @@ func TestFailedLyricsLookupIsTriedAgain(t *testing.T) {
 		if calls == 1 {
 			return nil, errors.New("lrclib: 503 Service Unavailable")
 		}
-		return &lrclib.Lyrics{Synced: []lrclib.Line{{At: 0, Text: "first words"}}}, nil
+		return &lrclib.Lyrics{Synced: []lyrics.Line{{At: 0, Text: "first words"}}}, nil
 	}
 	a.queue.restore(playstate.State{Items: tracks("a"), Index: 0, RecStart: -1})
 	a.current = a.queue.current()
@@ -362,6 +404,1091 @@ func TestMiniPlayerAloneTakesTheArtworkColour(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("the mini player never took a colour from the artwork")
+}
+
+// The window asks for a cover at the size it draws it, which a display at
+// scale 1 makes smaller than the player's own. The theme still has to follow
+// the cover the window shows.
+func TestWindowTakesTheArtworkColourAtTheDisplayScale(t *testing.T) {
+	a := newTestApp(t)
+	// A display at scale 1 asks for the player's 64-point cover at 64 pixels.
+	a.displayScale = 1
+	a.thumbs = artwork.New(&http.Client{Transport: redArt{}}, func() {})
+	a.settings.Dynamic = true
+	a.queue.restore(playstate.State{Items: tracks("a"), Index: 0, RecStart: -1})
+	a.current = a.queue.current()
+	a.current.Thumbnail = "https://lh3.googleusercontent.com/cover=w544-h544"
+	var shown *m3.Theme
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.view(c)
+		shown = m3.Of(c)
+	}, 1000, 700)
+	for range 200 {
+		tt.Frame()
+		if a.theme.dynamicOK {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The frame that took the colour draws the glide from it, rather than
+	// leaving the next theme to a repaint nothing asked for.
+	colour := a.theme.dynamic
+	if !a.theme.dynamicOK || colour.R < 150 || colour.G > 40 || colour.B > 40 {
+		t.Fatalf("the player's red cover gave %v (taken = %v)", colour, a.theme.dynamicOK)
+	}
+	if shown.Seed != colour {
+		t.Fatalf("the frame that took the cover's colour resolved its theme from %v, want %v", shown.Seed, colour)
+	}
+	tt.Advance(themeGlide + 20*time.Millisecond)
+	tt.Frame()
+	if want := m3.New(m3.Config{Seed: colour}, false).Scheme.Primary; shown.Scheme.Primary != want {
+		t.Fatalf("primary = %v, want the cover's %v", shown.Scheme.Primary, want)
+	}
+}
+
+// A restored, paused queue lets the user seek through timed lyrics without a
+// wall clock or network. The notch geometry represents a Retina display above
+// and to the left of the primary display, in logical points.
+func notchTestApp(t *testing.T) *app {
+	t.Helper()
+	a, _ := playbackApp(t)
+	a.notch.cutout = mygo.Rectangle{X: -900, Y: -900, Width: 180, Height: 32}
+	q := tracks("a", "b")
+	for i := range q {
+		q[i].Duration = "0:50"
+	}
+	a.queue.restore(playstate.State{Items: q, Index: 0, RecStart: -1})
+	a.current, a.total, a.resumeID = q[0], 50*time.Second, "a"
+	return a
+}
+
+func TestMacDesktopOffersNotchAndBackgroundPlayback(t *testing.T) {
+	a := newTestApp(t)
+	a.saver.Path = filepath.Join(t.TempDir(), "settings.json")
+	a.router.Push("/settings")
+	tt := ui.NewTester(a.view, 1000, 700)
+	if err := tt.Click("Search settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("desktop")
+	tt.Advance(time.Second)
+	if runtime.GOOS != "darwin" {
+		if !tt.HasText("Track notifications") || !tt.HasText("Menu bar icon") || tt.HasText("Keep running when closed") {
+			t.Fatal("non-Mac desktop controls changed")
+		}
+		// Click finds the row title first and Space plays or pauses, so
+		// toggle the switch from the keyboard with Enter.
+		tabTo(t, tt, "Menu bar icon")
+		tt.Key(0, ui.KeyEnter)
+		a.saver.Wait()
+		if a.trayEnabled() || settings.Load(a.saver.Path).ShowTray {
+			t.Fatal("the macOS fallback overrode another platform's hidden tray preference")
+		}
+		return
+	}
+	for _, label := range []string{"Track notifications", "Menu bar icon", "Tray icon", "Close to tray"} {
+		if tt.HasText(label) {
+			t.Fatalf("obsolete macOS control %q is still offered", label)
+		}
+	}
+	if !tt.HasText("Notch player") {
+		t.Fatal("notch setting disappeared")
+	}
+	if err := tt.Click("Keep running in background"); err != nil {
+		t.Fatal(err)
+	}
+	a.saver.Wait()
+	saved := settings.Load(a.saver.Path)
+	if saved.CloseToTray == nil || !*saved.CloseToTray || saved.ShowTray || saved.NotifyTrack || a.settings.ShowTray {
+		t.Fatal("background playback changed legacy tray settings or enabled banners")
+	}
+	if !a.trayEnabled() {
+		t.Fatal("a Mac without a notch lost the menu bar player")
+	}
+}
+
+func TestNotchBackgroundDefaultCanBeOverriddenAndSaved(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS notch close behavior")
+	}
+	for _, notchAvailable := range []bool{true, false} {
+		t.Run(strconv.FormatBool(notchAvailable), func(t *testing.T) {
+			a := notchTestApp(t)
+			if !notchAvailable {
+				a.notch.cutout = mygo.Rectangle{}
+			}
+			a.saver.Path = filepath.Join(t.TempDir(), "settings.json")
+			a.router.Push("/settings")
+			tt := ui.NewTester(a.view, 1000, 700)
+			if err := tt.Click("Search settings"); err != nil {
+				t.Fatal(err)
+			}
+			tt.Type("desktop")
+			tt.Advance(time.Second)
+			// The first click reverses the displayed default: a supported notch
+			// starts on, while a Mac without one still starts off.
+			if err := tt.Click("Keep running in background"); err != nil {
+				t.Fatal(err)
+			}
+			a.saver.Wait()
+			saved := settings.Load(a.saver.Path)
+			if saved.CloseToTray == nil || *saved.CloseToTray == notchAvailable {
+				t.Fatal("background switch did not reflect the notch default or save its override")
+			}
+			// A saved preference wins even after reconnecting a notched display.
+			a.settings = saved
+			a.notch.cutout.Width = 180
+			tt.Frame()
+			if err := tt.Click("Keep running in background"); err != nil {
+				t.Fatal(err)
+			}
+			a.saver.Wait()
+			saved = settings.Load(a.saver.Path)
+			if saved.CloseToTray == nil || *saved.CloseToTray != notchAvailable {
+				t.Fatal("notch default replaced an explicit close preference")
+			}
+			if saved.ShowTray || saved.NotifyTrack || a.current.VideoID != "a" || a.player.Playing() {
+				t.Fatal("changing close behavior affected desktop notifications or playback")
+			}
+		})
+	}
+}
+
+func TestNotchArtworkIgnoresLatePreviousCover(t *testing.T) {
+	a := notchTestApp(t)
+	oldRequested, releaseOld := make(chan struct{}, 1), make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			close(releaseOld)
+			released = true
+		}
+	}
+	a.thumbs.Close()
+	a.thumbs = artwork.New(&http.Client{Transport: artworkTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/old.png" {
+			oldRequested <- struct{}{}
+			select {
+			case <-releaseOld:
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+		}
+		img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+		for i := 0; i < len(img.Pix); i += 4 {
+			channel := 0
+			if r.URL.Path == "/new.png" {
+				channel = 2
+			}
+			img.Pix[i+channel], img.Pix[i+3] = 220, 255
+		}
+		var body bytes.Buffer
+		if err := png.Encode(&body, img); err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"image/png"}}, Body: io.NopCloser(&body), Request: r}, nil
+	})}, func() {})
+	t.Cleanup(a.thumbs.Close)
+	t.Cleanup(release)
+	q := tracks("a", "b", "no-cover")
+	q[0].Thumbnail, q[1].Thumbnail = "https://example.test/old.png", "https://example.test/new.png"
+	a.queue.restore(playstate.State{Items: q, Index: 0, RecStart: -1})
+	a.current = q[0]
+	tt := ui.NewTester(a.notchView, 284, 38)
+	select {
+	case <-oldRequested:
+	case <-time.After(time.Second):
+		t.Fatal("initial cover was not requested")
+	}
+	if err := tt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	bounds := a.notch.bounds()
+	tt.SetSize(bounds.Width, bounds.Height)
+	tt.Advance(time.Second)
+	if err := tt.Click("Next"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for a.thumbs.Bitmap(q[1].Thumbnail, 192) == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	tt.Advance(time.Second)
+	cover, found := tt.Find("Album cover")
+	if !found {
+		t.Fatal("expanded album cover is missing")
+	}
+	x, y := int(cover.X+cover.W/2), int(cover.Y+cover.H/2)
+	blue := tt.Image().RGBAAt(x, y)
+	if a.current.VideoID != "b" || blue.B < 180 || blue.R > 30 {
+		t.Fatalf("new song's cover is missing: %v", blue)
+	}
+	release()
+	deadline = time.Now().Add(time.Second)
+	for a.thumbs.Bitmap(q[0].Thumbnail, 192) == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if a.thumbs.Bitmap(q[0].Thumbnail, 192) == nil {
+		t.Fatal("old cover did not finish loading")
+	}
+	tt.Frame()
+	if got := tt.Image().RGBAAt(x, y); got != blue {
+		t.Fatalf("late old artwork replaced the active cover: %v", got)
+	}
+	if err := tt.Click("Next"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(time.Second)
+	if got := tt.Image().RGBAAt(x, y); got.R != got.G || got.G != got.B {
+		t.Fatalf("missing cover did not use a neutral placeholder: %v", got)
+	}
+}
+
+func TestNotchLyricsFollowSeekingAndTrackChanges(t *testing.T) {
+	a := notchTestApp(t)
+	calls := 0
+	a.lyricsSource = func(_ context.Context, q lrclib.Query) (*lrclib.Lyrics, error) {
+		calls++
+		return &lrclib.Lyrics{Synced: []lyrics.Line{
+			{At: 0, Text: q.Title + " first"},
+			{At: 10 * time.Second, Text: q.Title + " second"},
+			{At: 20 * time.Second, Text: q.Title + " third"},
+			{At: 30 * time.Second, Text: q.Title + " fourth"},
+			{At: 40 * time.Second, Text: q.Title + " fifth"},
+		}}, nil
+	}
+	compact := a.notch.bounds()
+	tt := ui.NewTester(a.notchView, compact.Width, compact.Height)
+	if calls != 0 {
+		t.Fatal("collapsed notch fetched lyrics")
+	}
+	if err := tt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	expanded := a.notch.bounds()
+	tt.SetSize(expanded.Width, expanded.Height)
+	tt.Advance(time.Second)
+	if expanded.Width != 480 || expanded.Height != 190 {
+		t.Fatalf("expanded notch is not compact: %+v", expanded)
+	}
+	for _, xy := range [][2]int{{0, 0}, {expanded.Width - 1, 0}, {0, expanded.Height - 1}, {expanded.Width - 1, expanded.Height - 1}} {
+		if tt.Image().RGBAAt(xy[0], xy[1]).A != 0 {
+			t.Fatalf("corner %v is opaque", xy)
+		}
+	}
+	if !tt.HasText("Track a first") || tt.HasText("Track a fifth") || calls != 1 {
+		t.Fatalf("initial lyrics: %q, calls %d", tt.Texts(), calls)
+	}
+	if expanded.Y != compact.Y || expanded.X+expanded.Width/2 != compact.X+compact.Width/2 {
+		t.Fatal("expanded panel moved away from camera")
+	}
+	if a.nowPlaying.open || a.nowPlaying.tab != tabQueue || a.nowPlaying.lyrics.followed != -1 {
+		t.Fatal("notch changed the main player's presentation")
+	}
+	mini := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	tabTo(t, mini, "Position")
+	mini.Key(0, ui.KeyEnd)
+	tt.Frame()
+	if !tt.HasText("Track a fifth") || tt.HasText("Track a first") {
+		t.Fatalf("seek did not update notch lyrics: %q", tt.Texts())
+	}
+	mini.Key(0, ui.KeyHome)
+	tt.Frame()
+	if !tt.HasText("Track a first") || tt.HasText("Track a fifth") {
+		t.Fatal("seek back did not update lyrics")
+	}
+	if err := tt.Click("Next"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.current.VideoID != "b" || !tt.HasText("Track b first") || tt.HasText("Track a first") {
+		t.Fatalf("track change left stale lyrics: %q", tt.Texts())
+	}
+	if calls != 2 {
+		t.Fatalf("lyrics fetched %d times, want once per song", calls)
+	}
+	if !a.notch.expanded {
+		t.Fatal("Next closed the notch")
+	}
+	if err := tt.Click("Previous"); err != nil {
+		t.Fatal(err)
+	}
+	if a.current.VideoID != "a" || !a.notch.expanded {
+		t.Fatal("Previous did not return to the prior song in the open panel")
+	}
+	if err := tt.Click("Next"); err != nil {
+		t.Fatal(err)
+	}
+	// Returning to a song may use either lyric cache; collapsing must not fetch.
+	callsBeforeClose := calls
+	if err := tt.Click("Close notch lyrics from playback indicator"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(time.Second)
+	tt.SetSize(compact.Width, compact.Height)
+	if a.notch.expanded || tt.HasText("Track b first") {
+		t.Fatal("indicator did not collapse lyrics")
+	}
+	if err := tt.Click("Open notch lyrics from playback indicator"); err != nil {
+		t.Fatal(err)
+	}
+	tt.SetSize(expanded.Width, expanded.Height)
+	tt.Key(0, ui.KeyEscape)
+	if a.notch.expanded || calls != callsBeforeClose {
+		t.Fatal("Escape or cached reopen failed")
+	}
+}
+
+func TestNotchLyricsHaveStaticEmptyAndRetryStates(t *testing.T) {
+	for _, scenario := range []string{"static", "empty", "failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			a := notchTestApp(t)
+			calls := 0
+			a.lyricsSource = func(context.Context, lrclib.Query) (*lrclib.Lyrics, error) {
+				calls++
+				switch scenario {
+				case "static":
+					return &lrclib.Lyrics{Plain: "Words without timestamps"}, nil
+				case "empty":
+					return nil, nil
+				default:
+					if calls == 1 {
+						return nil, errors.New("offline")
+					}
+					return &lrclib.Lyrics{Synced: []lyrics.Line{{At: 0, Text: "Recovered lyrics"}}}, nil
+				}
+			}
+			tt := ui.NewTester(a.notchView, 284, 38)
+			if err := tt.Click("Open notch lyrics"); err != nil {
+				t.Fatal(err)
+			}
+			bounds := a.notch.bounds()
+			tt.SetSize(bounds.Width, bounds.Height)
+			tt.Advance(time.Second)
+			if !tt.HasText("Previous") || !tt.HasText("Play") || !tt.HasText("Next") {
+				t.Fatal("lyric fallback hid the transport")
+			}
+			switch scenario {
+			case "static":
+				if !tt.HasText("Synced lyrics unavailable") || !tt.HasText("Words without timestamps") {
+					t.Fatal(tt.Texts())
+				}
+			case "empty":
+				if !tt.HasText("No lyrics for this song.") {
+					t.Fatal(tt.Texts())
+				}
+			default:
+				if !tt.HasText("Couldn't load lyrics") {
+					t.Fatal(tt.Texts())
+				}
+				if err := tt.Click("Retry lyrics"); err != nil {
+					t.Fatal(err)
+				}
+				if calls != 2 || !tt.HasText("Recovered lyrics") {
+					t.Fatal(tt.Texts())
+				}
+			}
+		})
+	}
+}
+
+func TestNotchWaitsForCurrentLyricsWhenTrackChanges(t *testing.T) {
+	a := notchTestApp(t)
+	a.lyricsSource = func(_ context.Context, q lrclib.Query) (*lrclib.Lyrics, error) {
+		return &lrclib.Lyrics{Synced: []lyrics.Line{{At: 0, Text: q.Title + " lyrics"}}}, nil
+	}
+	drain := deferredRunner(a)
+	tt := ui.NewTester(a.notchView, 284, 38)
+	if err := tt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	bounds := a.notch.bounds()
+	tt.SetSize(bounds.Width, bounds.Height)
+	if !tt.HasText("Loading lyrics") {
+		t.Fatal(tt.Texts())
+	}
+	mini := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	if err := mini.Click("Next"); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	tt.Frame()
+	if !tt.HasText("Track b lyrics") || tt.HasText("Track a lyrics") {
+		t.Fatalf("superseded result was applied: %q", tt.Texts())
+	}
+}
+
+func TestNotchSettingIsMacOnlyAndPersists(t *testing.T) {
+	a := notchTestApp(t)
+	a.saver.Path = filepath.Join(t.TempDir(), "settings.json")
+	a.router.Push("/settings")
+	tt := ui.NewTester(a.view, 1000, 900)
+	if err := tt.Click("Search settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("notch")
+	if runtime.GOOS != "darwin" {
+		if tt.HasText("Notch player") {
+			t.Fatal("macOS setting appeared on another platform")
+		}
+		return
+	}
+	if !a.settings.ShowNotch || a.trayEnabled() {
+		t.Fatal("notch must default to enabled")
+	}
+	panel := ui.NewTester(a.notchView, 284, 38)
+	if err := panel.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Show notch player"); err != nil {
+		t.Fatal(err)
+	}
+	a.saver.Wait()
+	panel.Frame()
+	if a.settings.ShowNotch || settings.Load(a.saver.Path).ShowNotch || a.notch.expanded || panel.HasText("Open notch lyrics") || !a.trayEnabled() {
+		t.Fatal("disabled notch stayed visible or was not saved")
+	}
+	if !tt.HasText("The menu bar mini player is active. Turn on to use the MacBook notch.") {
+		t.Fatal("the setting did not explain the menu bar fallback")
+	}
+	restored := notchTestApp(t)
+	restored.settings = settings.Load(a.saver.Path)
+	if !restored.trayEnabled() || restored.notchEnabled() || restored.settings.NotifyTrack {
+		t.Fatal("relaunch did not keep the menu bar choice without notifications")
+	}
+	if err := tt.Click("Show notch player"); err != nil {
+		t.Fatal(err)
+	}
+	a.saver.Wait()
+	panel.Frame()
+	if !settings.Load(a.saver.Path).ShowNotch || !panel.HasText("Open notch lyrics") || a.trayEnabled() {
+		t.Fatal("notch did not return after re-enabling")
+	}
+}
+
+func TestNotchDisplayChangesRestoreTheMenuBarWithoutSaving(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS desktop player selection")
+	}
+	a := notchTestApp(t)
+	a.saver.Path = filepath.Join(t.TempDir(), "settings.json")
+	keep := true
+	a.settings.CloseToTray = &keep
+	a.saveSettings()
+	a.saver.Wait()
+	before, err := os.ReadFile(a.saver.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.router.Push("/settings")
+	main := ui.NewTester(a.view, 1000, 900)
+	if err := main.Click("Search settings"); err != nil {
+		t.Fatal(err)
+	}
+	main.Type("notch")
+	panel := ui.NewTester(a.notchView, 284, 38)
+	if err := panel.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	// A display notification removes the built-in cutout (for example in
+	// clamshell mode). The saved preference must survive the temporary loss.
+	a.setNotchCutout(mygo.Rectangle{})
+	panel.Frame()
+	main.Frame()
+	if !a.trayEnabled() || a.notch.expanded || a.notch.transitioning || panel.HasText("Notch panel") {
+		t.Fatal("losing the notched display did not switch to the menu bar")
+	}
+	if !main.HasText("The menu bar mini player is active until a display with a notch is available.") {
+		t.Fatal("the unavailable display was not explained in Settings")
+	}
+	mini := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	if !mini.HasText("Track a") || !mini.HasText("Play") || !mini.HasText("Open Meiro") {
+		t.Fatal("the fallback mini player lost the current song or controls")
+	}
+	a.setNotchCutout(mygo.Rectangle{X: -1200, Y: -800, Width: 220, Height: 32})
+	panel.SetSize(324, 38)
+	main.Frame()
+	if a.trayEnabled() || !panel.HasText("Open notch lyrics") || a.notch.expanded {
+		t.Fatal("reconnecting the display did not restore a compact notch")
+	}
+	a.saver.Wait()
+	after, err := os.ReadFile(a.saver.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || !a.settings.ShowNotch || !*a.closeToBackgroundChoice() || a.settings.NotifyTrack {
+		t.Fatal("display changes rewrote the notch/background choice or enabled banners")
+	}
+	if a.current.VideoID != "a" || a.player.Playing() || a.queue.len() != 2 {
+		t.Fatal("switching desktop players changed the paused queue")
+	}
+}
+
+func TestNotchFallbackKeepsAudioAndMiniPlayerControls(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS desktop player selection")
+	}
+	a, r := tonesApp(t, 600)
+	r.url = func(string, int) (string, error) { return r.file, nil }
+	a.notch.cutout = mygo.Rectangle{Width: 180, Height: 32}
+	a.saver.Path = filepath.Join(t.TempDir(), "settings.json")
+	a.router.Push("/album/MPREb_test")
+	main := ui.NewTester(a.view, 1000, 900)
+	if err := main.Click("Album Track One"); err != nil {
+		t.Fatal(err)
+	}
+	pollUntil(t, a, "playing audio", func() bool { return a.player.Playing() && a.player.Position() > 0 })
+	position, seek, resolves := a.player.Position(), a.seekVersion, r.count("vid-3")
+	a.router.Push("/settings")
+	main.Frame()
+	if err := main.Click("Search settings"); err != nil {
+		t.Fatal(err)
+	}
+	main.Type("notch")
+	if err := main.Click("Show notch player"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.trayEnabled() || !a.player.Playing() || a.player.Position() < position || a.seekVersion != seek || r.count("vid-3") != resolves {
+		t.Fatal("turning off the notch interrupted or restarted audio")
+	}
+	mini := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	if err := mini.Click("Pause"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.player.Paused() {
+		t.Fatal("the menu bar mini player did not pause audio")
+	}
+	if err := mini.Click("Play"); err != nil {
+		t.Fatal(err)
+	}
+	if err := main.Click("Show notch player"); err != nil {
+		t.Fatal(err)
+	}
+	a.setNotchCutout(mygo.Rectangle{})
+	if !a.trayEnabled() || !a.player.Playing() {
+		t.Fatal("losing the display interrupted playback or hid the fallback")
+	}
+	a.setNotchCutout(mygo.Rectangle{Width: 180, Height: 32})
+	if a.trayEnabled() || !a.player.Playing() || a.player.Position() < position || a.current.VideoID != "vid-3" || r.count("vid-3") != resolves || len(a.history) != 1 {
+		t.Fatal("returning to the notch interrupted or restarted audio")
+	}
+	a.saver.Wait()
+}
+
+func TestNotchProgressSeeksWithoutInterferenceFromTheMainPlayer(t *testing.T) {
+	a := notchTestApp(t)
+	a.lyricsSource = func(context.Context, lrclib.Query) (*lrclib.Lyrics, error) {
+		return &lrclib.Lyrics{Synced: []lyrics.Line{
+			{At: 0, Text: "Opening line"},
+			{At: 10 * time.Second, Text: "Middle line"},
+			{At: 40 * time.Second, Text: "Last line"},
+		}}, nil
+	}
+	tt := ui.NewTester(a.notchView, 284, 38)
+	if err := tt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	bounds := a.notch.bounds()
+	tt.SetSize(bounds.Width, bounds.Height)
+	tt.Advance(time.Second)
+	mini := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	slider, found := tt.Find("Notch position")
+	if !found {
+		t.Fatal("notch seek control is missing")
+	}
+	x, y := slider.X+slider.W/2, slider.Y+slider.H/2
+	tt.Press(x, y)
+	mini.Frame()
+	if !a.notch.scrubbing || a.seekVersion != 0 {
+		t.Fatal("main player ended a notch drag or sought before release")
+	}
+	tt.Release(x, y)
+	tt.Advance(time.Second)
+	if a.notch.scrubbing || a.seekVersion == 0 || a.playbackPosition() != 25*time.Second || !tt.HasText("0:25") {
+		t.Fatalf("notch did not seek on release: position %v, texts %q", a.playbackPosition(), tt.Texts())
+	}
+	if !tt.HasText("Opening line") || !tt.HasText("Middle line") || !tt.HasText("Last line") {
+		t.Fatal("previous, current and next lyrics are not visible")
+	}
+	tabTo(t, tt, "Notch position")
+	tt.Key(0, ui.KeyEnd)
+	tt.Advance(time.Second)
+	if a.playbackPosition() != 50*time.Second || !tt.HasText("Last line") || tt.HasText("Opening line") {
+		t.Fatal("End did not seek and follow lyrics")
+	}
+	tt.Key(0, ui.KeyHome)
+	tt.Advance(time.Second)
+	if a.playbackPosition() != 0 || !tt.HasText("Opening line") || tt.HasText("Last line") {
+		t.Fatal("Home did not seek back")
+	}
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+	tt.Key(0, ui.KeyEnd)
+	line, found := tt.Find("Last line")
+	if !found || line.X < 268 || line.Y < 38 || line.Y+line.H > 174 {
+		t.Fatal("reduced motion did not place the active lyric in its column")
+	}
+	// A track whose duration is unknown cannot accept a seek.
+	a.total = 0
+	tt.Frame()
+	version := a.seekVersion
+	tt.Key(0, ui.KeyEnd)
+	if a.seekVersion != version || !tt.HasText("--:--") || !a.notch.expanded {
+		t.Fatal("unknown duration accepted a seek or hid the panel")
+	}
+}
+
+func TestNotchCollapsesTwoSecondsAfterPointerLeaves(t *testing.T) {
+	a := notchTestApp(t)
+	nt := ui.NewTester(a.notchView, 284, 38)
+	if err := nt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	nt.SetSize(480, 190)
+	nt.Advance(300 * time.Millisecond)
+	// Empty space inside the panel counts as inside, not just controls.
+	nt.Move(240, 60)
+	nt.Advance(5 * time.Second)
+	if !a.notch.expanded {
+		t.Fatal("hovering inside the notch collapsed it")
+	}
+	nt.Move(500, 230)
+	nt.Advance(1900 * time.Millisecond)
+	if !a.notch.expanded {
+		t.Fatal("notch collapsed before two seconds")
+	}
+	nt.Move(300, 100)
+	nt.Advance(3 * time.Second)
+	if !a.notch.expanded {
+		t.Fatal("returning to the notch did not cancel the deadline")
+	}
+	nt.Move(500, 230)
+	nt.Advance(1900 * time.Millisecond)
+	if !a.notch.expanded {
+		t.Fatal("second departure reused an expired deadline")
+	}
+	nt.Advance(100 * time.Millisecond)
+	if a.notch.expanded || !a.notch.transitioning || a.notch.bounds().Height != 190 {
+		t.Fatal("deadline did not start the normal closing animation")
+	}
+	nt.Advance(40 * time.Millisecond)
+	panel, _ := nt.Find("Notch panel")
+	if panel.H <= 38 || panel.H >= 190 {
+		t.Fatalf("unexpected closing geometry: %+v", panel)
+	}
+	nt.Advance(240 * time.Millisecond)
+	bounds := a.notch.bounds()
+	nt.SetSize(bounds.Width, bounds.Height)
+	if bounds.Width != 284 || bounds.Height != 38 || a.notch.transitioning || nt.HasText("Next") {
+		t.Fatal("auto-collapse left an expanded panel")
+	}
+	if a.current.VideoID != "a" || a.player.Playing() || a.playbackPosition() != 0 || a.nowPlaying.open {
+		t.Fatal("auto-collapse changed playback or the main player")
+	}
+}
+
+func TestNotchAutoCollapseWaitsForDragAndKeyboard(t *testing.T) {
+	for _, keyboard := range []bool{false, true} {
+		t.Run(strconv.FormatBool(keyboard), func(t *testing.T) {
+			a := notchTestApp(t)
+			nt := ui.NewTester(a.notchView, 284, 38)
+			if err := nt.Click("Open notch lyrics"); err != nil {
+				t.Fatal(err)
+			}
+			nt.SetSize(480, 190)
+			nt.Advance(300 * time.Millisecond)
+			if keyboard {
+				nt.Move(500, 230)
+				nt.Advance(time.Second)
+				tabTo(t, nt, "Notch position")
+				nt.Key(0, ui.KeyRight)
+			} else {
+				slider, _ := nt.Find("Notch position")
+				nt.Press(slider.X+slider.W/2, slider.Y+slider.H/2)
+				nt.Move(500, 230)
+			}
+			nt.Advance(3 * time.Second)
+			if !a.notch.expanded {
+				t.Fatal("notch collapsed during an interaction")
+			}
+			if keyboard {
+				if a.seekVersion == 0 {
+					t.Fatal("keyboard seeking stopped working")
+				}
+				nt.SetFocused(false)
+			} else {
+				if !a.notch.scrubbing || a.seekVersion != 0 {
+					t.Fatal("drag ended or sought before pointer release")
+				}
+				nt.Release(500, 230)
+				if a.notch.scrubbing || a.seekVersion == 0 {
+					t.Fatal("pointer release did not commit the seek")
+				}
+			}
+			nt.Advance(1900 * time.Millisecond)
+			if !a.notch.expanded {
+				t.Fatal("interaction did not grant a fresh two-second delay")
+			}
+			nt.Advance(100 * time.Millisecond)
+			if a.notch.expanded {
+				t.Fatal("notch did not collapse after interaction ended")
+			}
+		})
+	}
+}
+
+func TestNotchAutoCollapseWaitsAfterKeyboardSeeking(t *testing.T) {
+	a := notchTestApp(t)
+	nt := ui.NewTester(a.notchView, 284, 38)
+	if err := nt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	nt.SetSize(480, 190)
+	nt.Advance(300 * time.Millisecond)
+	// Mouse focus has no visible keyboard focus ring, but subsequent arrow
+	// keys must still postpone closing while the user seeks.
+	if err := nt.Click("Notch position"); err != nil {
+		t.Fatal(err)
+	}
+	nt.Move(500, 230)
+	nt.Advance(1500 * time.Millisecond)
+	seekVersion := a.seekVersion
+	nt.Key(0, ui.KeyRight)
+	nt.Advance(1500 * time.Millisecond)
+	if !a.notch.expanded || a.seekVersion <= seekVersion {
+		t.Fatal("keyboard seeking after mouse focus did not postpone closing")
+	}
+	nt.Advance(500 * time.Millisecond)
+	if a.notch.expanded {
+		t.Fatal("mouse-acquired focus kept the notch open after seeking")
+	}
+}
+
+func TestNotchCompactWingsCompleteHeldClicks(t *testing.T) {
+	const label = "Open notch lyrics"
+	a := notchTestApp(t)
+	nt := ui.NewTester(a.notchView, 284, 38)
+	for range 3 {
+		nt.SetFocused(false)
+		r, ok := nt.Find(label)
+		if !ok {
+			t.Fatal("compact wing disappeared after collapsing")
+		}
+		x, y := r.X+r.W/2, r.Y+r.H/2
+		nt.Press(x, y)
+		nt.SetFocused(true) // AppKit can make the panel key on mouse down.
+		nt.Advance(500 * time.Millisecond)
+		if a.notch.expanded {
+			t.Fatal("press opened the notch before release")
+		}
+		nt.Release(142, 19) // Cancel over the non-interactive camera gap.
+		if a.notch.expanded {
+			t.Fatal("cancelled press opened the notch")
+		}
+		nt.SetFocused(false)
+		nt.Press(x, y)
+		nt.SetFocused(true)
+		nt.Advance(500 * time.Millisecond)
+		nt.Release(x+1, y)
+		if !a.notch.expanded {
+			t.Fatal("held click did not expand the notch on release")
+		}
+		nt.SetSize(480, 190)
+		nt.Advance(300 * time.Millisecond)
+		nt.Key(0, ui.KeyEscape)
+		nt.Advance(300 * time.Millisecond)
+		nt.SetSize(284, 38)
+		if a.notch.expanded || a.notch.transitioning || a.current.VideoID != "a" || a.player.Playing() {
+			t.Fatal("collapse changed playback or left an active transition")
+		}
+	}
+}
+
+func TestNotchReopeningDiscardsAutoCollapseDeadline(t *testing.T) {
+	a := notchTestApp(t)
+	nt := ui.NewTester(a.notchView, 284, 38)
+	if err := nt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	nt.SetSize(480, 190)
+	nt.Advance(300 * time.Millisecond)
+	nt.Move(500, 230)
+	nt.Advance(1500 * time.Millisecond)
+	nt.Key(0, ui.KeyEscape)
+	nt.Advance(300 * time.Millisecond)
+	nt.SetSize(284, 38)
+	if err := nt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	nt.SetSize(480, 190)
+	nt.Advance(300 * time.Millisecond)
+	nt.Move(500, 230)
+	nt.Advance(1900 * time.Millisecond)
+	if !a.notch.expanded {
+		t.Fatal("old deadline closed the reopened notch")
+	}
+	nt.Advance(100 * time.Millisecond)
+	if a.notch.expanded {
+		t.Fatal("reopened notch never armed a fresh deadline")
+	}
+}
+
+func TestNotchCoverOpensNowPlaying(t *testing.T) {
+	for _, input := range []string{"click", "keyboard"} {
+		t.Run(input, func(t *testing.T) {
+			a := notchTestApp(t)
+			a.router.Push("/home")
+			main := ui.NewTester(a.view, 1000, 700)
+			if input == "keyboard" {
+				if err := main.Click("Up next"); err != nil {
+					t.Fatal(err)
+				}
+				main.Advance(time.Second)
+				if !a.nowPlaying.queueOnly {
+					t.Fatal("precondition: main window did not open the queue")
+				}
+			}
+			wasOpen, wasQueue := a.nowPlaying.open, a.nowPlaying.queueOnly
+			nt := ui.NewTester(a.notchView, 284, 38)
+			if err := nt.Click("Open notch lyrics"); err != nil {
+				t.Fatal(err)
+			}
+			nt.SetSize(480, 190)
+			nt.Advance(140 * time.Millisecond)
+			cover, found := nt.Find("Open Now Playing")
+			if !found || cover.W != 76 || cover.H != 76 {
+				t.Fatalf("large cover is not an accessible button of the original size: found %v, rect %+v", found, cover)
+			}
+			nt.Press(cover.X+cover.W/2, cover.Y+cover.H/2)
+			nt.Release(cover.X+cover.W/2, cover.Y+cover.H/2)
+			if !a.notch.expanded || a.nowPlaying.open != wasOpen || a.nowPlaying.queueOnly != wasQueue {
+				t.Fatal("compact cover or fading artwork changed the main player")
+			}
+			nt.Advance(300 * time.Millisecond)
+			tabTo(t, nt, "Notch position")
+			nt.Key(0, ui.KeyEnd)
+			position, seek := a.playbackPosition(), a.seekVersion
+			if input == "keyboard" {
+				tabTo(t, nt, "Open Now Playing")
+				nt.Key(0, ui.KeyEnter)
+			} else if err := nt.Click("Open Now Playing"); err != nil {
+				t.Fatal(err)
+			}
+			if !a.nowPlaying.open || a.nowPlaying.queueOnly || a.nowPlaying.closing || a.notch.expanded || !a.notch.transitioning || a.notch.bounds().Height != 190 {
+				t.Fatal("cover did not open Now Playing and begin collapsing the notch")
+			}
+			main.Frame()
+			main.Advance(time.Second)
+			nt.Advance(300 * time.Millisecond)
+			bounds := a.notch.bounds()
+			nt.SetSize(bounds.Width, bounds.Height)
+			if !main.HasText("Now playing") || !main.HasText("Track a") || !main.HasText("Play") || bounds.Width != 284 || bounds.Height != 38 || nt.HasText("Open Now Playing") {
+				t.Fatalf("main player or compact notch did not finish appearing: bounds %+v, main %q, notch %q", bounds, main.Texts(), nt.Texts())
+			}
+			if a.player.Playing() || a.playbackPosition() != position || a.seekVersion != seek || a.current.VideoID != "a" || a.queue.index != 0 || len(a.queue.items) != 2 || a.router.Path() != "/home" {
+				t.Fatal("cover navigation changed playback or the underlying page")
+			}
+			if err := main.Click("Close the player"); err != nil {
+				t.Fatal(err)
+			}
+			main.Advance(time.Second)
+			if err := nt.Click("Open notch lyrics"); err != nil {
+				t.Fatal(err)
+			}
+			nt.SetSize(480, 190)
+			nt.Advance(300 * time.Millisecond)
+			cover, _ = nt.Find("Open Now Playing")
+			if err := nt.Click("Close notch lyrics"); err != nil {
+				t.Fatal(err)
+			}
+			nt.Advance(40 * time.Millisecond)
+			nt.Press(cover.X+cover.W/2, cover.Y+cover.H/2)
+			nt.Release(cover.X+cover.W/2, cover.Y+cover.H/2)
+			if a.nowPlaying.open || a.notch.expanded {
+				t.Fatal("closing artwork accepted a click")
+			}
+		})
+	}
+}
+
+func TestNotchCoverKeepsPlayingAudio(t *testing.T) {
+	a, r := tonesApp(t, 600)
+	r.url = func(string, int) (string, error) { return r.file, nil }
+	a.notch.cutout = mygo.Rectangle{Width: 180, Height: 32}
+	a.router.Push("/album/MPREb_test")
+	main := ui.NewTester(a.view, 1000, 700)
+	if err := main.Click("Album Track One"); err != nil {
+		t.Fatal(err)
+	}
+	pollUntil(t, a, "playing audio", func() bool { return a.player.Playing() && a.player.Position() > 0 })
+	nt := ui.NewTester(a.notchView, 284, 38)
+	if err := nt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	nt.SetSize(480, 190)
+	nt.Advance(300 * time.Millisecond)
+	position, seek, resolves := a.player.Position(), a.seekVersion, r.count("vid-3")
+	if err := nt.Click("Open Now Playing"); err != nil {
+		t.Fatal(err)
+	}
+	main.Frame()
+	main.Advance(time.Second)
+	nt.Advance(300 * time.Millisecond)
+	if !main.HasText("Now playing") || !main.HasText("Album Track One") || !a.player.Playing() || a.player.Position() < position || a.current.VideoID != "vid-3" || a.seekVersion != seek || r.count("vid-3") != resolves || len(a.history) != 1 {
+		t.Fatal("opening Now Playing interrupted, sought, or restarted audio")
+	}
+}
+
+func TestNotchOpenMeiroCollapsesWithoutChangingPlayback(t *testing.T) {
+	const cutoutWidth = 180
+	a := notchTestApp(t)
+	a.router.Push("/home")
+	a.notch.cutout.Width = cutoutWidth
+	calls := 0
+	a.lyricsSource = func(context.Context, lrclib.Query) (*lrclib.Lyrics, error) {
+		calls++
+		return &lrclib.Lyrics{Synced: []lyrics.Line{{At: 0, Text: "Keep these lyrics"}}}, nil
+	}
+	bounds := a.notch.bounds()
+	tt := ui.NewTester(a.notchView, bounds.Width, bounds.Height)
+	if tt.HasText("Open Meiro") {
+		t.Fatal("main-window button appeared in the compact notch")
+	}
+	if err := tt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	bounds = a.notch.bounds()
+	tt.SetSize(bounds.Width, bounds.Height)
+	tt.Advance(300 * time.Millisecond)
+	launch, found := tt.Find("Open Meiro")
+	collapse, _ := tt.Find("Close notch lyrics")
+	if !found || launch.W < 28 || launch.H < 28 || launch.X < 0 || launch.X+launch.W > collapse.X || launch.Y+launch.H > 38 {
+		t.Fatalf("main-window target overlaps collapse/camera or leaves the header: %+v, collapse %+v", launch, collapse)
+	}
+	tabTo(t, tt, "Notch position")
+	tt.Key(0, ui.KeyEnd)
+	position, seekVersion := a.playbackPosition(), a.seekVersion
+	for _, input := range []string{"click", "keyboard", "reduce-motion"} {
+		reduced := input == "reduce-motion"
+		tt.SetPreferences(ui.Preferences{ReduceMotion: reduced})
+		opened := a.notch.bounds()
+		if input == "keyboard" {
+			tabTo(t, tt, "Open Meiro")
+			tt.Key(0, ui.KeyEnter)
+		} else if err := tt.Click("Open Meiro"); err != nil {
+			t.Fatal(err)
+		}
+		if a.notch.expanded || !a.notch.transitioning || a.notch.bounds() != opened {
+			t.Fatalf("%s: opening Meiro did not start an animated collapse", input)
+		}
+		tt.Advance(40 * time.Millisecond)
+		panel, _ := tt.Find("Notch panel")
+		if reduced && panel.H != float32(opened.Height) || !reduced && (panel.H <= 38 || panel.H >= float32(opened.Height)) {
+			t.Fatalf("%s: collapse skipped the expected transition: %+v", input, panel)
+		}
+		tt.Advance(240 * time.Millisecond)
+		bounds = a.notch.bounds()
+		tt.SetSize(bounds.Width, bounds.Height)
+		if bounds.Width != cutoutWidth+2*notchWing || bounds.Height != 38 || a.notch.transitioning || tt.HasText("Open Meiro") || tt.HasText("Keep these lyrics") || tt.HasText("Next") {
+			t.Fatalf("%s: opening Meiro left an expanded notch", input)
+		}
+		// The headless desktop is nil; native Show/Restore/Focus needs macOS.
+		if a.current.VideoID != "a" || a.player.Playing() || a.playbackPosition() != position || a.seekVersion != seekVersion || calls != 1 || a.nowPlaying.open || a.router.Path() != "/home" {
+			t.Fatalf("%s: opening Meiro changed playback, the main page, or fetched lyrics again", input)
+		}
+		if err := tt.Click("Open notch lyrics from playback indicator"); err != nil {
+			t.Fatal(err)
+		}
+		bounds = a.notch.bounds()
+		tt.SetSize(bounds.Width, bounds.Height)
+		tt.Advance(300 * time.Millisecond)
+		if !tt.HasText("Open Meiro") || !tt.HasText("Keep these lyrics") || calls != 1 {
+			t.Fatal("reopening did not restore the panel and cached lyrics")
+		}
+	}
+}
+
+func TestNotchIndicatorFollowsBufferingPlaybackAndPause(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	tone := filepath.Join(t.TempDir(), "tone.wav")
+	if out, err := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=duration=60", tone).CombinedOutput(); err != nil {
+		t.Fatalf("tone: %v: %s", err, out)
+	}
+	a, r := playbackApp(t)
+	r.file = tone
+	a.notch.cutout = mygo.Rectangle{Width: 180, Height: 32}
+	a.router.Push("/album/MPREb_test")
+	main := ui.NewTester(a.view, 1000, 700)
+	main.Frame()
+	drain := deferredRunner(a)
+	nt := ui.NewTester(a.notchView, 284, 38)
+	if err := main.Click("Album Track One"); err != nil {
+		t.Fatal(err)
+	}
+	nt.Frame()
+	if !nt.HasText("Buffering") {
+		t.Fatal("pending stream has no buffering indicator")
+	}
+	drain()
+	deadline := time.Now().Add(5 * time.Second)
+	for a.player.Position() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	nt.Frame()
+	if a.player.Position() == 0 || !nt.HasText("Playing") || len(a.history) != 1 {
+		t.Fatalf("real audio did not start: position %v, history %d, %q", a.player.Position(), len(a.history), nt.Texts())
+	}
+	nt.Advance(time.Second)
+	before := bytes.Clone(nt.Image().Pix)
+	animated := false
+	for range 10 {
+		nt.Advance(100 * time.Millisecond)
+		if !bytes.Equal(before, nt.Image().Pix) {
+			animated = true
+			break
+		}
+	}
+	if !animated {
+		t.Fatal("playback indicator did not animate")
+	}
+	if err := nt.Click("Open notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	bounds := a.notch.bounds()
+	nt.SetSize(bounds.Width, bounds.Height)
+	nt.Advance(time.Second)
+	if err := nt.Click("Pause"); err != nil {
+		t.Fatal(err)
+	}
+	nt.Frame()
+	if !a.player.Paused() || !nt.HasText("Play") || !a.notch.expanded {
+		t.Fatal("notch pause failed or collapsed the panel")
+	}
+	if err := nt.Click("Play"); err != nil {
+		t.Fatal(err)
+	}
+	nt.Frame()
+	if a.player.Paused() || !nt.HasText("Pause") || !a.notch.expanded {
+		t.Fatal("notch Play did not resume playback in the open panel")
+	}
+	if err := nt.Click("Pause"); err != nil {
+		t.Fatal(err)
+	}
+	if err := nt.Click("Close notch lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	nt.Advance(time.Second)
+	nt.SetSize(284, 38)
+	if nt.HasText("Previous") || nt.HasText("Next") {
+		t.Fatal("compact notch showed transport controls")
+	}
+	before = bytes.Clone(nt.Image().Pix)
+	nt.Advance(time.Second)
+	if !bytes.Equal(before, nt.Image().Pix) {
+		t.Fatal("paused indicator kept animating")
+	}
 }
 
 func TestEpisodeRelatedTabListsEpisodes(t *testing.T) {

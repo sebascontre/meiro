@@ -35,25 +35,38 @@ type BrowseResult struct {
 }
 
 // pageHeading reads the heading an artist, album or playlist puts over its
-// content: the first header renderer with a name, and the picture in it. The
-// renderers differ by page, which is why the one with a name is taken rather
-// than a named one.
+// content. Older pages put it at the top level; current albums put a responsive
+// header in the primary tab. Only the header's thumbnail belongs to the page,
+// not its artist portrait or a picture from the tracks and recommendations.
 func pageHeading(root any) (title, thumbnail string) {
 	object, ok := root.(*jsonObject)
 	if !ok {
 		return "", ""
 	}
-	header, ok := object.get("header").(*jsonObject)
-	if !ok {
-		return "", ""
-	}
-	for _, member := range header.members {
-		renderer, ok := member.value.(*jsonObject)
-		if !ok {
-			continue
+	if header, ok := object.get("header").(*jsonObject); ok {
+		for _, member := range header.members {
+			renderer, ok := member.value.(*jsonObject)
+			if !ok {
+				continue
+			}
+			if title := rendererText(renderer.get("title")); title != "" {
+				return title, rendererThumbnail(renderer.get("thumbnail"))
+			}
 		}
-		if title := rendererText(renderer.get("title")); title != "" {
-			return title, rendererThumbnail(renderer.get("thumbnail"))
+	}
+	contents, _ := nestedObject(root, "contents")
+	page, _ := nestedObject(contents, "twoColumnBrowseResultsRenderer")
+	tabs, _ := page.get("tabs").([]any)
+	for _, tab := range tabs {
+		renderer, _ := nestedObject(tab, "tabRenderer")
+		content, _ := nestedObject(renderer, "content")
+		sections, _ := nestedObject(content, "sectionListRenderer")
+		items, _ := sections.get("contents").([]any)
+		for _, item := range items {
+			header, _ := nestedObject(item, "musicResponsiveHeaderRenderer")
+			if title := rendererText(header.get("title")); title != "" {
+				return title, rendererThumbnail(header.get("thumbnail"))
+			}
 		}
 	}
 	return "", ""
@@ -291,11 +304,6 @@ func episodePage(result *BrowseResult) *BrowseResult {
 	return result
 }
 
-// GetRecap loads the listening-review page for the signed-in account.
-func (c *Client) GetRecap(ctx context.Context) (*BrowseResult, error) {
-	return c.browse(ctx, "FEmusic_listening_review")
-}
-
 // newBrowseResult reads a browse response. The response is parsed once, and
 // everything taken from it is read off that one tree.
 func (c *Client) newBrowseResult(raw json.RawMessage) *BrowseResult {
@@ -338,6 +346,13 @@ func browseContinuationQueue(result *BrowseResult) []browseContinuation {
 // browse response. Shelf continuations are owned by their renderer and must
 // remain available on the corresponding MusicSection instead.
 func pageContinuationToken(root any) string {
+	// YouTube continues a playlist, a show or a shelf in an appended list
+	// rather than in a continuation renderer: it answers the next page with
+	// the items themselves and a trailing continuationItemRenderer, under no
+	// shelf at all. The token is the page's own, and so are the items.
+	if token := appendedContinuationToken(root); token != "" {
+		return token
+	}
 	var walk func(any) string
 	walk = func(value any) string {
 		switch node := value.(type) {
@@ -363,6 +378,32 @@ func pageContinuationToken(root any) string {
 		return ""
 	}
 	return walk(root)
+}
+
+// appendedContinuationToken reads the token of a page YouTube appends items
+// to: onResponseReceivedActions[0].appendContinuationItemsAction. The action
+// lists the items, and a trailing continuationItemRenderer asks for the page
+// after them.
+func appendedContinuationToken(root any) string {
+	object, ok := root.(*jsonObject)
+	if !ok {
+		return ""
+	}
+	actions, _ := object.get("onResponseReceivedActions").([]any)
+	for _, action := range actions {
+		appended, _ := nestedObject(action, "appendContinuationItemsAction")
+		items, _ := appended.get("continuationItems").([]any)
+		for index := len(items) - 1; index >= 0; index-- {
+			renderer, ok := nestedObject(items[index], "continuationItemRenderer")
+			if !ok {
+				continue
+			}
+			if token := continuationToken(renderer); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
 }
 
 func continuationToken(root any) string {

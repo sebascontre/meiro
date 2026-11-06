@@ -43,8 +43,6 @@ func (a *app) miniPlayer(c *ui.Context) {
 	col.Children(func() {
 		ui.Column(c.Key("mini-content")).Grow(1).MinHeight(0).Gap(8).Children(func() {
 			ui.Row(c.Key("mini-player")).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
-				// Drawn at playerArt pixels, the size followArtwork takes its colour
-				// from, so the picture it needs is the one this frame fetches.
 				a.art(c, a.current.Thumbnail, playerArt, miniArt, m3.Large, func() {
 					if a.current.IsVideo() {
 						m3.VideoBadge(c, miniArt)
@@ -56,17 +54,17 @@ func (a *app) miniPlayer(c *ui.Context) {
 						m3.Text(c, m3.BodySmall, "Pick something in Meiro").TextColor(sc.OnSurfaceVariant)
 					})
 				} else {
-					a.trackLine(c, m3.TitleSmall, m3.BodySmall).Grow(1)
+					a.trackLine(c, m3.TitleSmall, m3.BodySmall, false).Grow(1)
 				}
 			})
 			a.scrubber(c)
 			a.transport(c, 48, 4)
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
 				// The slider fills the width: miniWidth (344) less the padding
-				// (24), the mute button (40) and its gap (8), and the speed
-				// button (56) and its gap (8).
-				a.volumeControl(c, 208)
-				a.speedControl(c, "mini-speed")
+				// (24), the mute button (40) and its gap (8), and the overflow
+				// button (40) and its gap (8).
+				a.volumeControl(c, 224)
+				a.speedButton(c, "mini-speed")
 			})
 			a.sidePanel(c, false, true)
 		})

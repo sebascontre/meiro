@@ -52,6 +52,10 @@ type Config struct {
 	// theme once it is registered with ui.RegisterFont; empty is the
 	// system's font.
 	Font string
+	// Colors, when set, replace the roles the seed would give, so the theme
+	// matches a palette made elsewhere. The pointer is compared, not the
+	// colours: load a new set to change it.
+	Colors *Colors
 }
 
 // DefaultSeed is Material's baseline purple.
@@ -79,7 +83,11 @@ func New(cfg Config, systemDark bool) *Theme {
 		dark = true
 	}
 	p := NewPalettes(cfg.Seed, cfg.Style)
-	return &Theme{Config: cfg, Dark: dark, Palettes: p, Scheme: NewScheme(p, dark)}
+	scheme := NewScheme(p, dark)
+	if cfg.Colors != nil {
+		cfg.Colors.apply(&scheme)
+	}
+	return &Theme{Config: cfg, Dark: dark, Palettes: p, Scheme: scheme}
 }
 
 var (
@@ -238,4 +246,15 @@ func Text(c *ui.Context, r Role, s string) ui.Element {
 // EmphasizedText is Text in the role's emphasised weight.
 func EmphasizedText(c *ui.Context, r Role, s string) ui.Element {
 	return r.Style(ui.Text(c, s), true).TextColor(Of(c).Scheme.OnSurface)
+}
+
+// RichText shows text whose spans differ in style, in a role of the type
+// scale, in the colour of text on a surface.
+func RichText(c *ui.Context, r Role, spans ...ui.Span) ui.Element {
+	return r.Style(ui.RichText(c, spans...), false).TextColor(Of(c).Scheme.OnSurface)
+}
+
+// EmphasizedRichText is RichText in the role's emphasised weight.
+func EmphasizedRichText(c *ui.Context, r Role, spans ...ui.Span) ui.Element {
+	return r.Style(ui.RichText(c, spans...), true).TextColor(Of(c).Scheme.OnSurface)
 }

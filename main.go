@@ -97,6 +97,7 @@ func main() {
 		// Browsing decodes and drops pictures in bursts, and the runtime
 		// keeps the freed memory for a while before it gives it back.
 		a.every(30*time.Second, debug.FreeOSMemory)
+		a.watchSettings()
 		a.watchSession()
 		a.every(flushInterval, func() { a.update(a.flushScrobbles) })
 		a.desktop.win.OnClosed(a.stopTicking)
@@ -191,6 +192,8 @@ func (a *app) setup() {
 	if directory, err := mygo.App.Path(mygo.PathUserData); err == nil {
 		a.saver.Path = filepath.Join(directory, "settings.json")
 		a.settings = settings.Load(a.saver.Path)
+		a.colorsPath = filepath.Join(directory, "colors.json")
+		a.colors = a.readColors()
 		a.account.creds.store = &secretfile.File{Path: filepath.Join(directory, "cookie.txt"), Keychain: mygo.Secrets, Name: credentialsKey}
 		a.historyPath = filepath.Join(directory, "history.json")
 		a.restorePlayback(filepath.Join(directory, "playback.json"))
@@ -203,12 +206,13 @@ func (a *app) setup() {
 				log.Printf("starting OBS widget: %v", err)
 			}
 		}
+		a.openDownloads(filepath.Join(directory, "Downloads"))
 	} else {
 		a.account.signIn.err = err.Error()
 	}
 	a.cacheSongsText = strconv.Itoa(a.settings.CacheSongs)
 	a.volume = a.settings.Volume
-	a.player.SetVolume(a.volume / 100)
+	a.player.SetVolume(playbackVolume(a.volume, 0, false, a.settings.LogVolume))
 	a.loadEQ()
 	a.applyCrossfade()
 	a.openAudioCache()
@@ -277,11 +281,13 @@ func (a *app) shutdown() {
 	a.requests.ttsLoad.stop()
 	a.requests.ttsTest.stop()
 	a.requests.ttsVoicesLoad.stop()
+	a.aiCheck.stop()
 	a.notificationArtwork.stop()
 	a.finishEpisodeProgress(true)
 	a.savePlayback(0)
 	a.saver.Wait()
 	a.historyWriter.Wait()
+	a.downloads.writer.Wait()
 	a.playSave.writer.Wait()
 	a.scrobble.outbox.Wait()
 	a.scrobble.credits.Wait()

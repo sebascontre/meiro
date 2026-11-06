@@ -7,30 +7,20 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/elianiva/meiro/internal/lyrics"
 )
 
 func TestParseLRC(t *testing.T) {
 	got := ParseLRC("[ar: Someone]\n[00:12.50] Hello\n[01:02.5][00:05]Chorus \nno stamp\n[00:20.00]\n[xx:yy] bad")
-	want := []Line{
-		{5 * time.Second, "Chorus"},
-		{12500 * time.Millisecond, "Hello"},
-		{20 * time.Second, ""},
-		{62500 * time.Millisecond, "Chorus"},
+	want := []lyrics.Line{
+		{At: 5 * time.Second, Text: "Chorus"},
+		{At: 12500 * time.Millisecond, Text: "Hello"},
+		{At: 20 * time.Second},
+		{At: 62500 * time.Millisecond, Text: "Chorus"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
-	}
-}
-
-func TestIndexAt(t *testing.T) {
-	lines := []Line{{5 * time.Second, "a"}, {10 * time.Second, "b"}}
-	for _, c := range []struct {
-		at   time.Duration
-		want int
-	}{{0, -1}, {4999 * time.Millisecond, -1}, {5 * time.Second, 0}, {9999 * time.Millisecond, 0}, {10 * time.Second, 1}, {time.Hour, 1}} {
-		if got := IndexAt(lines, c.at); got != c.want {
-			t.Errorf("IndexAt(%v) = %d, want %d", c.at, got, c.want)
-		}
 	}
 }
 
@@ -77,7 +67,7 @@ func TestGetNothingFound(t *testing.T) {
 
 func TestParseLRCKeepsTheOriginalOfARomanisedCopy(t *testing.T) {
 	got := ParseLRC("[00:01.00] 無敵の笑顔\n[00:04.00] 知りたい\n[03:29.00] 最後\n[00:01.00] Muteki no egao\n[00:04.00] Shiritai\n[03:29.00] Saigo")
-	want := []Line{{time.Second, "無敵の笑顔"}, {4 * time.Second, "知りたい"}, {209 * time.Second, "最後"}}
+	want := []lyrics.Line{{At: time.Second, Text: "無敵の笑顔"}, {At: 4 * time.Second, Text: "知りたい"}, {At: 209 * time.Second, Text: "最後"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
