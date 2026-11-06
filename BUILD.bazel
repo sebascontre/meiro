@@ -178,6 +178,7 @@ go_library(
         "shortcuts.go",
         "signin.go",
         "songrequests.go",
+        "radio_scripts.go",
         "songrow.go",
         "stats.go",
         "stream.go",
