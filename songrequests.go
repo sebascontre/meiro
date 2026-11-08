@@ -205,17 +205,18 @@ func radioDescribe(item youtube.MusicItem, title string, phrase int) string {
 	if artist := radioArtist(item.Artist); artist != "" {
 		text += ", de " + artist
 	}
-	if user := radioWords(item.RequestedBy); user != "" {
+	if user := radioName(item.RequestedBy); user != "" {
 		text += ", " + strings.ReplaceAll(radioRequestPhrases[phrase], "%U", user)
 	}
 	return text
 }
 
 func radioArtist(artist string) string {
-	if strings.EqualFold(strings.TrimSpace(artist), "itsyamivt") {
-		return "It´s Yami VT"
-	}
-	return radioWords(trimChannelSuffix(artist))
+	return radioName(trimChannelSuffix(artist))
+}
+
+func radioName(name string) string {
+	return radioWords(radioVT.ReplaceAllString(name, " viti$1"))
 }
 
 // trimChannelSuffix drops the "Ch." suffix YouTube channels use, such as
@@ -279,6 +280,8 @@ var bracketPairs = map[rune]rune{
 	'「': '」', '『': '』', '【': '】', '〔': '〕',
 	'〈': '〉', '《': '》', '〖': '〗', '〘': '〙', '〚': '〛',
 }
+
+var radioVT = regexp.MustCompile(`(?i)vt([^\p{L}\p{N}]|$)`)
 
 func isBracketCloser(r rune) bool {
 	for _, closer := range bracketPairs {

@@ -507,11 +507,29 @@ func TestRadioTitlePrefersJapaneseBeforeLatinDashSuffix(t *testing.T) {
 	}
 }
 
-func TestRadioArtistExpandsItsYamiVT(t *testing.T) {
-	for _, artist := range []string{"itsyamivt", "ItsYamiVT", " ITSYAMIVT "} {
-		if got := radioArtist(artist); got != "It´s Yami VT" {
-			t.Errorf("radioArtist(%q) = %q", artist, got)
+func TestRadioVTPronunciationAppliesToArtistsAndUsers(t *testing.T) {
+	for input, want := range map[string]string{
+		"itsyamivt": "itsyami viti",
+		"ItsYamiVT": "ItsYami viti",
+		"chromevt":  "chrome viti",
+		"ChromeVT":  "Chrome viti",
+		"CHROME VT": "chrome viti",
+		"Studio":    "Studio",
+	} {
+		if got := radioArtist(input); got != want {
+			t.Errorf("radioArtist(%q) = %q, want %q", input, got, want)
 		}
+	}
+	line := radioAnnouncement(
+		youtube.MusicItem{VideoID: "a", Title: "ItsYamiVT song", Artist: "itsyamivt", RequestedBy: "chromevt"},
+		youtube.MusicItem{VideoID: "b", Title: "Next song"})
+	for _, part := range []string{"ItsYamiVT song", "itsyami viti", "chrome viti"} {
+		if !strings.Contains(line, part) {
+			t.Errorf("announcement does not contain %q: %q", part, line)
+		}
+	}
+	if strings.Contains(line, "It´s Yami VT") {
+		t.Errorf("announcement contains the old special pronunciation: %q", line)
 	}
 	if got := radioArtist("Other Artist"); got != "Other Artist" {
 		t.Errorf("radioArtist changed unrelated artist to %q", got)
