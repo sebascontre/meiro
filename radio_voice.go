@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elianiva/meiro/internal/settings"
 	"github.com/elianiva/meiro/player"
 )
 
@@ -170,26 +171,42 @@ func fetchRadioClip(ctx context.Context, apiKey, voice, text string) (string, er
 	return file.Name(), nil
 }
 
+// radioSpeaker captures settings on the UI thread before starting a task.
+func (a *app) radioSpeaker() func(context.Context, string, string) error {
+	if a.requests.speakRadio != nil {
+		return a.requests.speakRadio
+	}
+	key, voice, volume := a.requests.ttsKey, a.settings.RadioVoice, radioPlaybackVolume(a.settings.RadioVolume)
+	return func(ctx context.Context, text, clip string) error {
+		return speakRadio(ctx, key, voice, text, clip, volume)
+	}
+}
+
 // speakRadio plays the announcement through Meiro's own audio output. clip is
 // audio already fetched ahead of time, or "".
-func (a *app) speakRadio(ctx context.Context, text, clip string) error {
+func speakRadio(ctx context.Context, key, voice, text, clip string, volume float64) error {
 	if clip == "" {
 		var err error
-		if clip, err = fetchRadioClip(ctx, a.requests.ttsKey, a.settings.RadioVoice, text); err != nil {
+		if clip, err = fetchRadioClip(ctx, key, voice, text); err != nil {
 			return err
 		}
 	}
 	defer os.Remove(clip)
-	return playRadioClip(ctx, clip)
+	return playRadioClip(ctx, clip, volume)
 }
 
 // radioPlayerOptions are the options of the player that speaks; tests replace
 // it to run without a sound card.
 var radioPlayerOptions = playerOptions
 
-func playRadioClip(ctx context.Context, path string) error {
+func radioPlaybackVolume(percent int) float64 {
+	return float64(settings.ClampRadioVolume(percent)) / 100
+}
+
+func playRadioClip(ctx context.Context, path string, volume float64) error {
 	voice := player.New(radioPlayerOptions()...)
 	defer voice.Stop()
+	voice.SetVolume(volume)
 	if err := voice.PlayContext(ctx, path); err != nil {
 		return err
 	}

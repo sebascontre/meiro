@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Radio Chatcito has its own volume control.** Set its volume independently from music, from mute to 200% to make the narrator easier to hear.
 - **Radio Chatcito has 100 announcer lines.** The expanded original scripts bring more humor and energy to song transitions.
 - **Song Request has its own page.** Open it from the navigation rail, directly above Settings, to manage Twitch requests, OBS and Radio Chatcito.
 - **Radio narration drops periods.** Periods in titles, artists and usernames are no longer read as long pauses.

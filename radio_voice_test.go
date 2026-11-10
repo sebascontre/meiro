@@ -44,10 +44,26 @@ func TestSpeakRadioPlaysTheSynthesizedClip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	start := time.Now()
-	if err := a.speakRadio(ctx, "hola", ""); err != nil {
+	if err := a.radioSpeaker()(ctx, "hola", ""); err != nil {
 		t.Fatalf("speakRadio: %v", err)
 	}
 	t.Logf("finished in %s", time.Since(start))
+}
+
+func TestRadioPlaybackVolumeAllowsBoostingNarration(t *testing.T) {
+	for _, tc := range []struct {
+		percent int
+		want    float64
+	}{
+		{0, 0},
+		{100, 1},
+		{150, 1.5},
+		{250, 2},
+	} {
+		if got := radioPlaybackVolume(tc.percent); got != tc.want {
+			t.Errorf("radioPlaybackVolume(%d) = %v, want %v", tc.percent, got, tc.want)
+		}
+	}
 }
 
 func TestRadioTransitionSpeaksThenStartsTheNextSong(t *testing.T) {

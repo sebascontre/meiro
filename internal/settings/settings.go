@@ -114,6 +114,9 @@ type Settings struct {
 	// RadioVoice is the Google Text-to-Speech voice Radio Chatcito speaks
 	// with, such as "es-US-Chirp3-HD-Puck". Empty means that one.
 	RadioVoice string `json:"radioVoice,omitempty"`
+	// RadioVolume is Radio Chatcito's playback volume, as a percentage of the
+	// normal level. Values above 100 can make the voice louder than its source.
+	RadioVolume int `json:"radioVolume"`
 	// RadioAlways makes Radio Chatcito speak between every pair of songs, for
 	// testing.
 	RadioAlways bool `json:"radioAlways,omitempty"`
@@ -152,8 +155,20 @@ const (
 func Defaults() Settings {
 	return Settings{
 		Seed: "#6750a4", Mode: "system", Volume: 70, AutoPlay: true, CacheSongs: audio.DefaultLimit, NotifyTrack: runtime.GOOS != "darwin", ShowTray: runtime.GOOS != "darwin", TrayMark: TrayMarkWordmark,
-		Zoom: DefaultZoom, ShowNotch: true, CrossfadeSeconds: DefaultCrossfade,
+		Zoom: DefaultZoom, ShowNotch: true, CrossfadeSeconds: DefaultCrossfade, RadioVolume: DefaultRadioVolume,
 	}
+}
+
+const (
+	MinRadioVolume     = 0
+	MaxRadioVolume     = 200
+	DefaultRadioVolume = 100
+)
+
+// ClampRadioVolume keeps the narrator volume within the range offered in
+// Settings. Zero is a valid mute setting.
+func ClampRadioVolume(volume int) int {
+	return min(max(volume, MinRadioVolume), MaxRadioVolume)
 }
 
 // The crossfade lengths the settings offer, in seconds.
@@ -306,6 +321,7 @@ func Parse(data []byte) (Settings, error) {
 	if read.Volume < 0 || read.Volume > 100 {
 		read.Volume = defaults.Volume
 	}
+	read.RadioVolume = ClampRadioVolume(read.RadioVolume)
 	read.CacheSongs = audio.ValidLimit(read.CacheSongs)
 	if _, ok := ParseSeed(read.Seed); !ok {
 		read.Seed = defaults.Seed

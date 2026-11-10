@@ -88,6 +88,45 @@ func TestClampZoomKeepsTheInterfaceReadable(t *testing.T) {
 	}
 }
 
+func TestRadioVolumeDefaultsAndClamps(t *testing.T) {
+	if got := Defaults().RadioVolume; got != DefaultRadioVolume {
+		t.Fatalf("default radio volume = %d, want %d", got, DefaultRadioVolume)
+	}
+	for _, tc := range []struct {
+		input string
+		want  int
+	}{
+		{`{}`, DefaultRadioVolume},
+		{`{"radioVolume":0}`, 0},
+		{`{"radioVolume":125}`, 125},
+		{`{"radioVolume":-1}`, MinRadioVolume},
+		{`{"radioVolume":500}`, MaxRadioVolume},
+	} {
+		got, err := Parse([]byte(tc.input))
+		if err != nil {
+			t.Fatalf("Parse(%s): %v", tc.input, err)
+		}
+		if got.RadioVolume != tc.want {
+			t.Errorf("Parse(%s).RadioVolume = %d, want %d", tc.input, got.RadioVolume, tc.want)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writer := &Writer{Path: path}
+	s := Defaults()
+	s.RadioVolume = 0
+	writer.Save(&s)
+	writer.Wait()
+	if got := Load(path).RadioVolume; got != 0 {
+		t.Errorf("saved muted radio volume = %d, want 0", got)
+	}
+	s.RadioVolume = 175
+	writer.Save(&s)
+	writer.Wait()
+	if got := Load(path).RadioVolume; got != 175 {
+		t.Errorf("saved radio volume = %d, want 175", got)
+	}
+}
+
 func TestRememberKeepsRecentSearchesUniqueAndBounded(t *testing.T) {
 	var s Settings
 	for _, q := range []string{"a", "b", "A", "c", "d", "e", "f", "g", "h", "i"} {

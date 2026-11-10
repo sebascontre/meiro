@@ -20,6 +20,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/internal/secretfile"
+	"github.com/elianiva/meiro/internal/settings"
 	"github.com/elianiva/meiro/internal/twitch"
 	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/youtube"
@@ -375,10 +376,7 @@ func (a *app) radioTransition(previous, next youtube.MusicItem, nextIndex int) b
 		clip, a.requests.clipPath = a.requests.clipPath, ""
 	}
 	a.discardRadioClip()
-	speak := a.requests.speakRadio
-	if speak == nil {
-		speak = a.speakRadio
-	}
+	speak := a.radioSpeaker()
 	startTask(a, &a.requests.radio, 45*time.Second, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, speak(ctx, line, clip)
 	}, func(_ struct{}, err error) {
@@ -804,10 +802,7 @@ func (a *app) testRadioVoice() {
 	r := &a.requests
 	key := r.ttsKey
 	r.ttsStatus = "Testing the voice…"
-	speak := r.speakRadio
-	if speak == nil {
-		speak = a.speakRadio
-	}
+	speak := a.radioSpeaker()
 	startTask(a, &r.ttsTest, 45*time.Second, func(ctx context.Context) (struct{}, error) {
 		if key == "" {
 			return struct{}{}, errors.New("save a Google API key first")
@@ -1152,6 +1147,19 @@ func (a *app) songRequestsCard(c *ui.Context) {
 						})
 					}
 				}
+				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+					settingLabel(c, "Narrator volume", "Adjust Radio Chatcito independently from music. Above 100% may cause audio clipping.").Grow(1)
+					volume := float64(settings.ClampRadioVolume(a.settings.RadioVolume))
+					slider := m3.Slider(c, &volume, settings.MinRadioVolume, settings.MaxRadioVolume, m3.SliderSpec{
+						Label: "Narrator volume", Key: "radio-volume",
+					}).Grow(1)
+					if slider.Changed() {
+						a.settings.RadioVolume = settings.ClampRadioVolume(int(volume + 0.5))
+						a.saveSettings()
+					}
+					m3.Text(c, m3.LabelLarge, fmt.Sprintf("%d%%", a.settings.RadioVolume)).
+						TextColor(sc.OnSurfaceVariant).Width(48).Shrink(0).TextAlign(ui.End)
+				})
 				if a.requests.ttsStatus != "" {
 					m3.Text(c, m3.BodyMedium, a.requests.ttsStatus).TextColor(sc.OnSurfaceVariant).MaxLines(4)
 				}
